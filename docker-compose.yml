@@ -1,0 +1,77 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GenomePlatform — Docker Compose
+#
+# Kullanım:
+#   1. .env dosyası oluştur:  cp .env.example .env  →  API anahtarını gir
+#   2. İlk build:             docker compose build
+#   3. Başlat:                docker compose up -d
+#   4. Logları izle:          docker compose logs -f
+#   5. Durdur:                docker compose down
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  genome-platform:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: genome-platform
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      # Kalıcı veri depolama (container yeniden başlasa da veri korunur)
+      - genome_uploads:/app/data/uploads
+      - genome_results:/app/data/results
+      - genome_logs:/app/data/logs
+      - genome_db:/app/data
+
+      # Geliştirme modunda: kaynak kodu mount et (hot reload için)
+      # Prodüksiyon'da bu satırları yorum satırına al:
+      - ./backend:/app/backend:ro
+      - ./frontend:/app/frontend:ro
+
+    # Kaynak limitleri (sunucu ortamına göre ayarla)
+    deploy:
+      resources:
+        limits:
+          cpus: "16"
+          memory: 32G
+        reservations:
+          cpus: "2"
+          memory: 4G
+
+    # Güvenlik: gereksiz Linux yeteneklerini kaldır
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID    # fastp / subprocess için gerekli
+      - SETGID
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  genome_uploads:
+  genome_results:
+  genome_logs:
+  genome_db:

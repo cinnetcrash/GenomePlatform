@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GenomePlatform — Otomatik Genomik Analiz</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+
+    .drop-zone {
+      border: 2px dashed #6366f1;
+      transition: all 0.2s;
+    }
+    .drop-zone.drag-over {
+      border-color: #4f46e5;
+      background: #eef2ff;
+    }
+    .stage-dot {
+      width: 12px; height: 12px; border-radius: 50%;
+      display: inline-block; margin-right: 8px;
+      flex-shrink: 0;
+    }
+    .dot-pending  { background: #d1d5db; }
+    .dot-running  { background: #f59e0b; animation: pulse 1s infinite; }
+    .dot-done     { background: #22c55e; }
+    .dot-failed   { background: #ef4444; }
+    .dot-skipped  { background: #94a3b8; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: .4; }
+    }
+
+    .progress-bar {
+      height: 6px; border-radius: 9999px;
+      background: #e2e8f0; overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%; border-radius: 9999px;
+      background: linear-gradient(90deg, #6366f1, #8b5cf6);
+      transition: width 0.5s ease;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen">
+
+  <!-- Header -->
+  <header class="bg-gradient-to-r from-indigo-700 to-violet-700 text-white py-6 px-8 shadow-lg">
+    <div class="max-w-4xl mx-auto flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight">🧬 GenomePlatform</h1>
+        <p class="text-indigo-200 text-sm mt-1">
+          Otomatik genomik analiz · AI klinik yorum · PCR primer tasarımı
+        </p>
+      </div>
+      <div class="text-right text-xs text-indigo-300">
+        <div>⏱ Analiz: ~15-45 dk</div>
+        <div>🔒 24 saat sonra otomatik silme</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-4 py-10 space-y-8">
+
+    <!-- Upload Kartı -->
+    <div id="upload-card" class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div class="px-8 py-6 border-b border-slate-100">
+        <h2 class="text-lg font-semibold text-slate-800">FASTQ Dosyası Yükle</h2>
+        <p class="text-sm text-slate-500 mt-1">
+          MinION veya Illumina FASTQ / FASTQ.gz — maksimum 2 GB
+        </p>
+      </div>
+      <div class="px-8 py-6">
+
+        <!-- Drop zone -->
+        <div id="drop-zone"
+             class="drop-zone rounded-xl bg-slate-50 p-10 text-center cursor-pointer"
+             onclick="document.getElementById('file-input').click()"
+             ondragover="handleDragOver(event)"
+             ondragleave="handleDragLeave(event)"
+             ondrop="handleDrop(event)">
+          <div class="text-5xl mb-3">📂</div>
+          <p class="text-slate-600 font-medium">
+            Dosyayı buraya sürükleyin veya tıklayın
+          </p>
+          <p class="text-slate-400 text-sm mt-1">
+            .fastq · .fastq.gz · .fq · .fq.gz
+          </p>
+          <input id="file-input" type="file"
+                 accept=".fastq,.fastq.gz,.fq,.fq.gz"
+                 class="hidden"
+                 onchange="handleFileSelect(this.files[0])">
+        </div>
+
+        <!-- Seçilen dosya bilgisi -->
+        <div id="file-info" class="hidden mt-4 p-4 bg-indigo-50 rounded-lg border border-indigo-100">
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="font-medium text-indigo-700" id="file-name"></span>
+              <span class="text-slate-500 text-sm ml-2" id="file-size"></span>
+            </div>
+            <button onclick="clearFile()"
+                    class="text-slate-400 hover:text-red-500 text-sm">✕</button>
+          </div>
+        </div>
+
+        <!-- Upload butonu -->
+        <button id="upload-btn"
+                onclick="startUpload()"
+                class="hidden mt-4 w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700
+                       text-white font-semibold rounded-xl transition-colors duration-200
+                       disabled:opacity-50 disabled:cursor-not-allowed">
+          🚀 Analizi Başlat
+        </button>
+
+        <!-- Upload progress -->
+        <div id="upload-progress" class="hidden mt-4">
+          <div class="flex justify-between text-sm text-slate-500 mb-1">
+            <span>Yükleniyor...</span>
+            <span id="upload-pct">0%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="upload-fill" style="width:0%"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Analiz İlerleme Kartı -->
+    <div id="progress-card" class="hidden bg-white rounded-2xl shadow-sm border border-slate-100">
+      <div class="px-8 py-5 border-b border-slate-100 flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-semibold text-slate-800">Analiz İlerliyor</h2>
+          <p class="text-sm text-slate-500 mt-0.5">
+            İş ID: <code id="display-job-id" class="bg-slate-100 px-1.5 py-0.5 rounded text-xs"></code>
+          </p>
+        </div>
+        <div id="overall-status"
+             class="px-3 py-1 rounded-full text-sm font-semibold bg-amber-100 text-amber-700">
+          Çalışıyor
+        </div>
+      </div>
+      <div class="px-8 py-6">
+        <!-- Aşamalar -->
+        <div id="stages-list" class="space-y-3 mb-6">
+          <!-- JS ile doldurulur -->
+        </div>
+        <!-- Progress bar -->
+        <div class="progress-bar">
+          <div class="progress-fill" id="overall-fill" style="width:5%"></div>
+        </div>
+        <p class="text-xs text-slate-400 mt-2 text-right" id="eta-text">Tahmini süre hesaplanıyor...</p>
+      </div>
+    </div>
+
+    <!-- Tamamlandı Kartı -->
+    <div id="done-card" class="hidden bg-white rounded-2xl shadow-sm border border-emerald-200">
+      <div class="px-8 py-6 flex items-center gap-4">
+        <div class="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center text-2xl">✅</div>
+        <div class="flex-1">
+          <h2 class="text-lg font-semibold text-slateald-800">Analiz Tamamlandı</h2>
+          <p class="text-slate-500 text-sm">Rapor 24 saat içinde silinecek.</p>
+        </div>
+        <a id="report-link" href="#" target="_blank"
+           class="py-2.5 px-6 bg-emerald-600 hover:bg-emerald-700
+                  text-white font-semibold rounded-xl transition-colors">
+          📄 Raporu İndir
+        </a>
+      </div>
+    </div>
+
+    <!-- Hata Kartı -->
+    <div id="error-card" class="hidden bg-white rounded-2xl shadow-sm border border-red-200">
+      <div class="px-8 py-6 flex items-start gap-4">
+        <div class="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">❌</div>
+        <div>
+          <h2 class="text-lg font-semibold text-red-700">Analiz Başarısız</h2>
+          <p id="error-msg" class="text-slate-500 text-sm mt-1"></p>
+          <button onclick="resetAll()"
+                  class="mt-3 text-sm text-indigo-600 hover:underline">
+            Yeni analiz başlat
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bilgi Kutuları -->
+    <div class="grid grid-cols-3 gap-4 text-sm">
+      <div class="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+        <div class="text-2xl mb-2">🔍</div>
+        <h3 class="font-semibold text-slate-700">Otomatik Tespit</h3>
+        <p class="text-slate-500 mt-1">MinION veya Illumina okumalarını otomatik ayırt eder.</p>
+      </div>
+      <div class="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+        <div class="text-2xl mb-2">🤖</div>
+        <h3 class="font-semibold text-slate-700">AI Yorum</h3>
+        <p class="text-slate-500 mt-1">Klinik önemi ve tedavi seçeneklerini yapay zeka değerlendirir.</p>
+      </div>
+      <div class="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+        <div class="text-2xl mb-2">🧪</div>
+        <h3 class="font-semibold text-slate-700">PCR Primer</h3>
+        <p class="text-slate-500 mt-1">Korunmuş bölgelerden otomatik primer tasarımı.</p>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="text-center py-6 text-slate-400 text-xs">
+    GenomePlatform — Prototip v0.1 &nbsp;|&nbsp;
+    Yüklenen dosyalar 24 saat sonra otomatik silinir.
+  </footer>
+
+<script>
+// ─── Durum Değişkenleri ───────────────────────────────────────────────────
+let selectedFile = null;
+let currentJobId = null;
+let pollTimer    = null;
+let startTime    = null;
+
+const STAGE_LABELS = {
+  detect:     "📡 Okuma Tipi Tespiti",
+  qc:         "📊 Kalite Kontrol (QC)",
+  assembly:   "🔧 Genom Assembly",
+  mlst:       "🔬 MLST Tiplemesi",
+  amr:        "💊 AMR Gen Tespiti",
+  annotation: "📝 Annotasyon (Bakta)",
+  ai:         "🤖 AI Klinik Yorum",
+  primers:    "🧪 PCR Primer Tasarımı",
+  report:     "📄 Rapor Üretimi",
+};
+
+const STAGE_ORDER = Object.keys(STAGE_LABELS);
+
+// ─── Dosya Seçimi ─────────────────────────────────────────────────────────
+function handleDragOver(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.add('drag-over');
+}
+function handleDragLeave(e) {
+  document.getElementById('drop-zone').classList.remove('drag-over');
+}
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) handleFileSelect(f);
+}
+
+function handleFileSelect(file) {
+  if (!file) return;
+  const allowed = ['.fastq', '.fastq.gz', '.fq', '.fq.gz'];
+  const ok = allowed.some(ext => file.name.toLowerCase().endsWith(ext));
+  if (!ok) {
+    alert('Yalnızca .fastq, .fastq.gz, .fq veya .fq.gz dosyaları desteklenir.');
+    return;
+  }
+  selectedFile = file;
+  document.getElementById('file-name').textContent = file.name;
+  document.getElementById('file-size').textContent = `(${(file.size / 1e6).toFixed(1)} MB)`;
+  document.getElementById('file-info').classList.remove('hidden');
+  document.getElementById('upload-btn').classList.remove('hidden');
+}
+
+function clearFile() {
+  selectedFile = null;
+  document.getElementById('file-info').classList.add('hidden');
+  document.getElementById('upload-btn').classList.add('hidden');
+  document.getElementById('file-input').value = '';
+}
+
+// ─── Upload ───────────────────────────────────────────────────────────────
+async function startUpload() {
+  if (!selectedFile) return;
+
+  const btn = document.getElementById('upload-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Yükleniyor...';
+  document.getElementById('upload-progress').classList.remove('hidden');
+
+  const formData = new FormData();
+  formData.append('file', selectedFile);
+
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/upload');
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round((e.loaded / e.total) * 100);
+        document.getElementById('upload-pct').textContent = pct + '%';
+        document.getElementById('upload-fill').style.width = pct + '%';
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        const data = JSON.parse(xhr.responseText);
+        currentJobId = data.job_id;
+        startTime = Date.now();
+        showProgressCard(data.job_id);
+        startPolling(data.job_id);
+      } else {
+        let msg = 'Yükleme başarısız.';
+        try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
+        showError(msg);
+        btn.disabled = false;
+        btn.textContent = '🚀 Analizi Başlat';
+      }
+    };
+
+    xhr.onerror = () => {
+      showError('Ağ hatası oluştu. Lütfen tekrar deneyin.');
+      btn.disabled = false;
+      btn.textContent = '🚀 Analizi Başlat';
+    };
+
+    xhr.send(formData);
+  } catch (e) {
+    showError(String(e));
+  }
+}
+
+// ─── Polling ──────────────────────────────────────────────────────────────
+function startPolling(jobId) {
+  pollTimer = setInterval(() => checkStatus(jobId), 4000);
+}
+
+async function checkStatus(jobId) {
+  try {
+    const res = await fetch(`/status/${jobId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    updateStages(data.stages || {});
+    updateOverallStatus(data.status);
+
+    if (data.status === 'completed') {
+      clearInterval(pollTimer);
+      showDone(jobId);
+    } else if (data.status === 'failed') {
+      clearInterval(pollTimer);
+      showError(data.error || 'Bilinmeyen hata.');
+    }
+  } catch (e) {
+    console.error('Polling hatası:', e);
+  }
+}
+
+// ─── Aşama Gösterimi ─────────────────────────────────────────────────────
+function updateStages(stages) {
+  const container = document.getElementById('stages-list');
+  let doneCount = 0;
+
+  const rows = STAGE_ORDER.map(key => {
+    const stage = stages[key] || { status: 'pending' };
+    const label = STAGE_LABELS[key] || key;
+    let dotClass = 'dot-pending';
+    let statusText = 'Bekliyor';
+
+    if (stage.status === 'running') {
+      dotClass = 'dot-running';
+      statusText = 'Çalışıyor...';
+    } else if (stage.status === 'done') {
+      dotClass = 'dot-done';
+      statusText = 'Tamamlandı';
+      doneCount++;
+    } else if (stage.status === 'failed') {
+      dotClass = 'dot-failed';
+      statusText = 'Başarısız';
+    } else if (stage.status === 'skipped') {
+      dotClass = 'dot-skipped';
+      statusText = 'Atlandı';
+      doneCount++;
+    }
+
+    return `
+      <div class="flex items-center justify-between py-1.5">
+        <div class="flex items-center">
+          <span class="stage-dot ${dotClass}"></span>
+          <span class="text-slate-700 text-sm">${label}</span>
+        </div>
+        <span class="text-xs text-slate-400">${statusText}</span>
+      </div>`;
+  });
+
+  container.innerHTML = rows.join('');
+
+  // Progress bar güncelle
+  const pct = Math.max(5, Math.round((doneCount / STAGE_ORDER.length) * 100));
+  document.getElementById('overall-fill').style.width = pct + '%';
+
+  // ETA tahmini
+  if (startTime && doneCount > 0) {
+    const elapsed = (Date.now() - startTime) / 1000;
+    const total   = (elapsed / doneCount) * STAGE_ORDER.length;
+    const remain  = Math.max(0, total - elapsed);
+    const mins    = Math.ceil(remain / 60);
+    document.getElementById('eta-text').textContent =
+      mins > 1 ? `Tahmini kalan: ~${mins} dakika` : 'Neredeyse bitti...';
+  }
+}
+
+function updateOverallStatus(status) {
+  const el = document.getElementById('overall-status');
+  const map = {
+    queued:     ['Sırada', 'bg-slate-100 text-slate-600'],
+    running:    ['Çalışıyor', 'bg-amber-100 text-amber-700'],
+    ai_pending: ['AI Yorumu', 'bg-violet-100 text-violet-700'],
+    completed:  ['Tamamlandı', 'bg-emerald-100 text-emerald-700'],
+    failed:     ['Başarısız', 'bg-red-100 text-red-700'],
+  };
+  const [label, cls] = map[status] || ['Bilinmiyor', 'bg-slate-100 text-slate-600'];
+  el.textContent  = label;
+  el.className    = `px-3 py-1 rounded-full text-sm font-semibold ${cls}`;
+}
+
+// ─── Kart Gösterimleri ────────────────────────────────────────────────────
+function showProgressCard(jobId) {
+  document.getElementById('upload-card').classList.add('hidden');
+  document.getElementById('progress-card').classList.remove('hidden');
+  document.getElementById('display-job-id').textContent = jobId;
+  updateStages({});
+}
+
+function showDone(jobId) {
+  document.getElementById('progress-card').classList.add('hidden');
+  const card = document.getElementById('done-card');
+  card.classList.remove('hidden');
+  document.getElementById('report-link').href = `/report/${jobId}`;
+  document.getElementById('overall-fill').style.width = '100%';
+}
+
+function showError(msg) {
+  document.getElementById('progress-card').classList.add('hidden');
+  document.getElementById('upload-card').classList.add('hidden');
+  const card = document.getElementById('error-card');
+  card.classList.remove('hidden');
+  document.getElementById('error-msg').textContent = msg;
+}
+
+function resetAll() {
+  location.reload();
+}
+</script>
+</body>
+</html>

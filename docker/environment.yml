@@ -1,0 +1,23 @@
+name: base
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - fastp
+  - mlst
+  - mafft
+  - primer3
+  - flye
+  - any2fasta
+  - pip:
+    - fastapi==0.115.0
+    - uvicorn[standard]==0.30.6
+    - anthropic>=0.40.0
+    - python-multipart==0.0.12
+    - aiofiles==24.1.0
+    - jinja2==3.1.4
+    - slowapi==0.1.9
+    - python-jose[cryptography]==3.3.0

@@ -1,0 +1,43 @@
+# Ortam ve gizli bilgiler
+.env
+*.key
+*.pem
+
+# Veri (yüklenen dosyalar ve analiz sonuçları — git'e ekleme!)
+data/uploads/
+data/results/
+data/logs/
+data/jobs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.idea/
+.vscode/
+*.sublime-project
+
+# Docker
+*.tar
+
+# Logs
+*.log

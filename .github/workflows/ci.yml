@@ -1,0 +1,142 @@
+name: CI — Test & Deploy Landing Page
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ─── Backend testleri ─────────────────────────────────────────────────────
+  test-backend:
+    name: Backend Testleri
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.11 kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Bağımlılıkları kur
+        run: pip install -r requirements.txt
+
+      - name: Modül import testleri
+        working-directory: backend
+        run: |
+          python -c "import config, security, database, cleanup, pipeline"
+          python -c "import ai_interpreter, primer_designer, report_generator"
+          echo "✅ Tüm modüller import edildi"
+
+      - name: Güvenlik fonksiyonlarını test et
+        working-directory: backend
+        run: |
+          python - << 'EOF'
+          import sys
+          sys.path.insert(0, '.')
+          from security import validate_filename, generate_job_id
+
+          # Geçerli dosya adları
+          assert validate_filename("sample.fastq.gz") == "sample.fastq.gz"
+          assert validate_filename("my_reads.fq") == "my_reads.fq"
+
+          # Geçersiz dosya adları engellenmeli
+          for bad in ["../../../etc/passwd", "malware.exe", "virus.sh"]:
+              try:
+                  validate_filename(bad)
+                  print(f"HATA: {bad} engellenmedi!")
+                  sys.exit(1)
+              except ValueError:
+                  pass
+
+          # Job ID formatı
+          jid = generate_job_id()
+          assert len(jid) == 32
+          assert jid.isalnum()
+
+          print("✅ Güvenlik testleri geçti")
+          EOF
+
+      - name: Veritabanı testini çalıştır
+        working-directory: backend
+        run: |
+          python - << 'EOF'
+          import sys, os, tempfile
+          sys.path.insert(0, '.')
+
+          # Geçici DB kullan
+          import database as db
+          db.DB_PATH = db.Path(tempfile.mktemp(suffix=".db"))
+          db.init_db()
+
+          # Job oluştur ve sorgula
+          db.create_job("abc123def456abc123def456abc12345", "test.fastq.gz",
+                        "2099-01-01T00:00:00+00:00", "abc", "deadbeef")
+          job = db.get_job("abc123def456abc123def456abc12345")
+          assert job["status"] == "queued"
+
+          # Aşama güncelle
+          db.update_stage("abc123def456abc123def456abc12345", "qc", "done", "ok")
+          import json
+          job2 = db.get_job("abc123def456abc123def456abc12345")
+          stages = json.loads(job2["stages"])
+          assert stages["qc"]["status"] == "done"
+
+          db.DB_PATH.unlink(missing_ok=True)
+          print("✅ Veritabanı testleri geçti")
+          EOF
+
+      - name: Rapor üretimi testi
+        working-directory: backend
+        run: |
+          python - << 'EOF'
+          import sys; sys.path.insert(0, '.')
+          from report_generator import generate_html_report
+          pr = {"job_id":"test","sample_name":"S1","read_type":"illumina",
+                "qc":{"total_reads":1000000},"mlst":{"scheme":"ecoli","st":"131"},
+                "amr":{"count":1,"genes":[{"gene":"CTX-M-15","class":"BETA-LACTAM",
+                       "subclass":"ESBL","identity":"100","method":"EXACTX"}]}}
+          ai = {"species_prediction":"E. coli","clinical_significance":"Test",
+                "resistance_profile":"ESBL","treatment_implications":"Carbapenem",
+                "epidemiology":"ST131","pcr_targets":[],"risk_level":"HIGH",
+                "summary":"Test summary"}
+          html = generate_html_report("test", pr, ai, [])
+          assert len(html) > 1000
+          assert "CTX-M-15" in html
+          assert "ST131" in html
+          print("✅ Rapor üretimi testi geçti")
+          EOF
+
+  # ─── GitHub Pages Deploy ──────────────────────────────────────────────────
+  deploy-pages:
+    name: Landing Sayfasını Deploy Et
+    runs-on: ubuntu-latest
+    needs: test-backend
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GitHub Pages yapılandır
+        uses: actions/configure-pages@v4
+
+      - name: docs/ dizinini yükle
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/
+
+      - name: Deploy et
+        id: deployment
+        uses: actions/deploy-pages@v4

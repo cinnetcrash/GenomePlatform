@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="GenomePlatform — Automated bacterial genomic analysis with AI interpretation and PCR primer design. Upload a FASTQ, get a clinical report.">
+  <meta property="og:title" content="GenomePlatform">
+  <meta property="og:description" content="Upload a FASTQ. Get a clinical genomic report in minutes.">
+  <meta property="og:type" content="website">
+  <title>GenomePlatform — Automated Genomic Analysis</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <style>
+    body { font-family: 'Inter', sans-serif; scroll-behavior: smooth; }
+    code, pre { font-family: 'JetBrains Mono', monospace; }
+
+    .gradient-text {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6, #ec4899);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-glow {
+      background: radial-gradient(ellipse 80% 60% at 50% 0%,
+        rgba(99,102,241,0.15) 0%, transparent 70%);
+    }
+    .card-hover {
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .card-hover:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    }
+    .pipeline-line {
+      position: relative;
+    }
+    .pipeline-line::before {
+      content: '';
+      position: absolute;
+      left: 20px;
+      top: 40px;
+      bottom: -20px;
+      width: 2px;
+      background: linear-gradient(to bottom, #6366f1, transparent);
+    }
+    .pipeline-line:last-child::before { display: none; }
+
+    .terminal {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .terminal-bar {
+      background: #1e293b;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fadeInUp 0.6s ease both; }
+    .fade-in-1 { animation-delay: 0.1s; }
+    .fade-in-2 { animation-delay: 0.2s; }
+    .fade-in-3 { animation-delay: 0.3s; }
+  </style>
+</head>
+<body class="bg-white text-slate-900">
+
+<!-- ─── Navigation ──────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 backdrop-blur border-b border-slate-100">
+  <div class="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <span class="text-2xl">🧬</span>
+      <span class="font-bold text-slate-800 text-lg">GenomePlatform</span>
+      <span class="ml-2 text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full font-medium">
+        v0.1 · Prototype
+      </span>
+    </div>
+    <div class="flex items-center gap-6 text-sm text-slate-600">
+      <a href="#features"     class="hover:text-indigo-600 transition-colors">Features</a>
+      <a href="#pipeline"     class="hover:text-indigo-600 transition-colors">Pipeline</a>
+      <a href="#install"      class="hover:text-indigo-600 transition-colors">Install</a>
+      <a href="https://github.com/cinnetcrash/GenomePlatform"
+         target="_blank"
+         class="flex items-center gap-1.5 bg-slate-900 text-white px-4 py-1.5 rounded-lg hover:bg-slate-700 transition-colors">
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<!-- ─── Hero ─────────────────────────────────────────────────────────────── -->
+<section class="hero-glow pt-28 pb-24 px-6">
+  <div class="max-w-4xl mx-auto text-center">
+    <div class="fade-in fade-in-1 inline-flex items-center gap-2 bg-indigo-50 border border-indigo-200 text-indigo-700 text-sm px-4 py-1.5 rounded-full mb-8">
+      <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+      Open-source · Self-hosted · Privacy-first
+    </div>
+
+    <h1 class="fade-in fade-in-1 text-5xl md:text-6xl font-bold leading-tight mb-6">
+      Upload a FASTQ.<br>
+      <span class="gradient-text">Get a clinical report.</span>
+    </h1>
+
+    <p class="fade-in fade-in-2 text-xl text-slate-500 max-w-2xl mx-auto mb-10 leading-relaxed">
+      GenomePlatform automates bacterial genome assembly, AMR profiling,
+      MLST typing, AI interpretation, and PCR primer design — all from a
+      single FASTQ file. No coding required.
+    </p>
+
+    <div class="fade-in fade-in-3 flex flex-col sm:flex-row gap-4 justify-center">
+      <a href="#install"
+         class="px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors text-lg">
+        Get Started →
+      </a>
+      <a href="https://github.com/cinnetcrash/GenomePlatform"
+         target="_blank"
+         class="px-8 py-3.5 border border-slate-200 hover:border-indigo-300 text-slate-700 font-semibold rounded-xl transition-colors text-lg">
+        View Source
+      </a>
+    </div>
+
+    <!-- Stats -->
+    <div class="fade-in fade-in-3 mt-16 grid grid-cols-3 gap-8 max-w-lg mx-auto">
+      <div>
+        <div class="text-3xl font-bold text-slate-800">9</div>
+        <div class="text-slate-500 text-sm mt-1">Pipeline stages</div>
+      </div>
+      <div>
+        <div class="text-3xl font-bold text-slate-800">24h</div>
+        <div class="text-slate-500 text-sm mt-1">Auto data deletion</div>
+      </div>
+      <div>
+        <div class="text-3xl font-bold text-slate-800">0</div>
+        <div class="text-slate-500 text-sm mt-1">Data stored</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Features ─────────────────────────────────────────────────────────── -->
+<section id="features" class="py-24 px-6 bg-slate-50">
+  <div class="max-w-6xl mx-auto">
+    <div class="text-center mb-16">
+      <h2 class="text-3xl font-bold text-slate-800">Everything in one pipeline</h2>
+      <p class="text-slate-500 mt-3 text-lg">
+        From raw reads to actionable clinical insights — automatically.
+      </p>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-6">
+      <!-- Feature cards -->
+      <div class="card-hover bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
+        <div class="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center text-2xl mb-4">🔍</div>
+        <h3 class="font-bold text-slate-800 text-lg mb-2">Auto Read Detection</h3>
+        <p class="text-slate-500 text-sm leading-relaxed">
+          Automatically distinguishes MinION long reads from Illumina short reads
+          based on read length distribution. No configuration needed.
+        </p>
+      </div>
+
+      <div class="card-hover bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
+        <div class="w-12 h-12 bg-green-50 rounded-xl flex items-center justify-center text-2xl mb-4">🔧</div>
+        <h3 class="font-bold text-slate-800 text-lg mb-2">De Novo Assembly</h3>
+        <p class="text-slate-500 text-sm leading-relaxed">
+          Flye for long reads, Shovill/SPAdes for Illumina. Produces
+          high-quality assemblies ready for downstream analysis.
+        </p>
+      </div>
+
+      <div class="card-hover bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
+        <div class="w-12 h-12 bg-purple-50 rounded-xl flex items-center justify-center text-2xl mb-4">💊</div>
+        <h3 class="font-bold text-slate-800 text-lg mb-2">AMR Profiling</h3>
+        <p class="text-slate-500 text-sm leading-relaxed">
+          AMRFinderPlus detects resistance genes, with class, subclass,
+          and identity scores. Carbapenemases, ESBL, colistin — all covered.
+        </p>
+      </div>
+
+      <div class="card-hover bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
+        <div class="w-12 h-12 bg-amber-50 rounded-xl flex items-center justify-center text-2xl mb-4">🔬</div>
+        <h3 class="font-bold text-slate-800 text-lg mb-2">MLST Typing</h3>
+        <p class="text-slate-500 text-sm leading-relaxed">
+          Sequence type determination for 100+ schemes. Identifies high-risk
+          clones like ST131, ST258, ST11 instantly.
+        </p>
+      </div>
+
+      <div class="card-hover bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
+        <div class="w-12 h-12 bg-rose-50 rounded-xl flex items-center justify-center text-2xl mb-4">🤖</div>
+        <h3 class="font-bold text-slate-800 text-lg mb-2">AI Clinical Interpretation</h3>
+        <p class="text-slate-500 text-sm leading-relaxed">
+          Claude AI synthesizes all findings into a clinical narrative:
+          species prediction, risk level, treatment implications,
+          and epidemiological context.
+        </p>
+      </div>
+
+      <div class="card-hover bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
+        <div class="w-12 h-12 bg-teal-50 rounded-xl flex items-center justify-center text-2xl mb-4">🧪</div>
+        <h3 class="font-bold text-slate-800 text-lg mb-2">PCR Primer Design</h3>
+        <p class="text-slate-500 text-sm leading-relaxed">
+          MAFFT alignment identifies conserved regions. Primer3 designs
+          optimised primer pairs (Tm, GC%, amplicon size) for each
+          resistance gene.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Pipeline ─────────────────────────────────────────────────────────── -->
+<section id="pipeline" class="py-24 px-6">
+  <div class="max-w-5xl mx-auto">
+    <div class="text-center mb-16">
+      <h2 class="text-3xl font-bold text-slate-800">The pipeline</h2>
+      <p class="text-slate-500 mt-3 text-lg">9 automated stages, ~15–45 minutes end-to-end</p>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-16 items-center">
+      <!-- Steps -->
+      <div class="space-y-6">
+        <div class="pipeline-line flex items-start gap-4">
+          <div class="w-10 h-10 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">1</div>
+          <div>
+            <div class="font-semibold text-slate-800">FASTQ Upload & Validation</div>
+            <div class="text-slate-500 text-sm mt-0.5">Magic byte check, size limit, type detection</div>
+          </div>
+        </div>
+        <div class="pipeline-line flex items-start gap-4">
+          <div class="w-10 h-10 rounded-full bg-indigo-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">2</div>
+          <div>
+            <div class="font-semibold text-slate-800">Quality Control</div>
+            <div class="text-slate-500 text-sm mt-0.5">NanoPlot (MinION) or FastP (Illumina)</div>
+          </div>
+        </div>
+        <div class="pipeline-line flex items-start gap-4">
+          <div class="w-10 h-10 rounded-full bg-violet-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">3</div>
+          <div>
+            <div class="font-semibold text-slate-800">De Novo Assembly</div>
+            <div class="text-slate-500 text-sm mt-0.5">Flye or Shovill, automatic selection</div>
+          </div>
+        </div>
+        <div class="pipeline-line flex items-start gap-4">
+          <div class="w-10 h-10 rounded-full bg-violet-400 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">4</div>
+          <div>
+            <div class="font-semibold text-slate-800">MLST + AMR Typing</div>
+            <div class="text-slate-500 text-sm mt-0.5">100+ MLST schemes · AMRFinderPlus</div>
+          </div>
+        </div>
+        <div class="pipeline-line flex items-start gap-4">
+          <div class="w-10 h-10 rounded-full bg-pink-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">5</div>
+          <div>
+            <div class="font-semibold text-slate-800">AI Interpretation</div>
+            <div class="text-slate-500 text-sm mt-0.5">Claude synthesises findings → clinical report</div>
+          </div>
+        </div>
+        <div class="pipeline-line flex items-start gap-4">
+          <div class="w-10 h-10 rounded-full bg-teal-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">6</div>
+          <div>
+            <div class="font-semibold text-slate-800">PCR Primer Design</div>
+            <div class="text-slate-500 text-sm mt-0.5">MAFFT → conserved regions → Primer3</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Example report preview -->
+      <div class="terminal shadow-2xl">
+        <div class="terminal-bar">
+          <div class="dot bg-red-500"></div>
+          <div class="dot bg-yellow-500"></div>
+          <div class="dot bg-green-500"></div>
+          <span class="text-slate-400 text-xs ml-2">GenomePlatform Report</span>
+        </div>
+        <div class="p-5 text-sm space-y-3">
+          <div class="text-green-400 font-medium">✓ Assembly: 4.9 Mbp · 3 contigs</div>
+          <div class="text-blue-400">◉ MLST: Escherichia coli · ST131</div>
+          <div class="border-t border-slate-700 pt-3">
+            <div class="text-slate-400 text-xs mb-2">AMR GENES DETECTED (3)</div>
+            <div class="text-red-400">  CTX-M-15   BETA-LACTAM   100.0%</div>
+            <div class="text-red-400">  OXA-1      BETA-LACTAM    99.8%</div>
+            <div class="text-yellow-400">  aac(6')-Ib AMINOGLYCOSIDE 98.2%</div>
+          </div>
+          <div class="border-t border-slate-700 pt-3">
+            <div class="text-slate-400 text-xs mb-2">AI RISK ASSESSMENT</div>
+            <div class="text-red-400 font-bold">  ⚠  HIGH RISK</div>
+            <div class="text-slate-300 text-xs mt-1">  ESBL-producing pandemic clone</div>
+            <div class="text-slate-300 text-xs">  Consider carbapenem therapy</div>
+          </div>
+          <div class="border-t border-slate-700 pt-3">
+            <div class="text-slate-400 text-xs mb-2">PCR PRIMERS (CTX-M-15)</div>
+            <div class="text-cyan-400 text-xs">  FWD 5'-ATGAGCAAATTATGCCTG-3'</div>
+            <div class="text-cyan-400 text-xs">  REV 5'-TCAGCGCTTGTCTCGCTA-3'</div>
+            <div class="text-slate-400 text-xs">  Amplicon: 621 bp · Tm: 58.2°C</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Privacy ───────────────────────────────────────────────────────────── -->
+<section class="py-16 px-6 bg-indigo-50">
+  <div class="max-w-4xl mx-auto text-center">
+    <div class="text-4xl mb-4">🔒</div>
+    <h2 class="text-2xl font-bold text-slate-800 mb-4">Privacy by design</h2>
+    <div class="grid md:grid-cols-3 gap-6 mt-8 text-left">
+      <div class="bg-white rounded-xl p-5 border border-indigo-100">
+        <div class="font-semibold text-slate-800 mb-1">🗑 24-hour auto-delete</div>
+        <p class="text-slate-500 text-sm">All uploaded files and analysis results are automatically deleted after 24 hours.</p>
+      </div>
+      <div class="bg-white rounded-xl p-5 border border-indigo-100">
+        <div class="font-semibold text-slate-800 mb-1">🏠 Self-hosted</div>
+        <p class="text-slate-500 text-sm">Run on your own hardware. Your genomic data never leaves your institution.</p>
+      </div>
+      <div class="bg-white rounded-xl p-5 border border-indigo-100">
+        <div class="font-semibold text-slate-800 mb-1">🔐 No tracking</div>
+        <p class="text-slate-500 text-sm">IP addresses are hashed and never stored in plain text. No analytics, no cookies.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Install ───────────────────────────────────────────────────────────── -->
+<section id="install" class="py-24 px-6">
+  <div class="max-w-4xl mx-auto">
+    <div class="text-center mb-12">
+      <h2 class="text-3xl font-bold text-slate-800">Get started in 3 steps</h2>
+    </div>
+
+    <div class="space-y-6">
+      <!-- Step 1 -->
+      <div class="flex items-start gap-6">
+        <div class="w-8 h-8 bg-slate-900 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0 mt-1">1</div>
+        <div class="flex-1">
+          <h3 class="font-semibold text-slate-800 text-lg mb-2">Clone and configure</h3>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="dot bg-red-500"></div><div class="dot bg-yellow-500"></div><div class="dot bg-green-500"></div>
+            </div>
+            <pre class="p-4 text-sm text-green-400 overflow-x-auto"><code>git clone https://github.com/cinnetcrash/GenomePlatform
+cd GenomePlatform
+cp .env.example .env
+# Edit .env and add your ANTHROPIC_API_KEY</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="flex items-start gap-6">
+        <div class="w-8 h-8 bg-slate-900 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0 mt-1">2</div>
+        <div class="flex-1">
+          <h3 class="font-semibold text-slate-800 text-lg mb-2">Build and launch with Docker</h3>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="dot bg-red-500"></div><div class="dot bg-yellow-500"></div><div class="dot bg-green-500"></div>
+            </div>
+            <pre class="p-4 text-sm text-green-400 overflow-x-auto"><code>docker compose build
+docker compose up -d
+# Platform running at http://localhost:8000</code></pre>
+          </div>
+          <p class="text-slate-500 text-sm mt-2">
+            Or without Docker (requires conda environments):
+          </p>
+          <div class="terminal mt-2">
+            <div class="terminal-bar">
+              <div class="dot bg-red-500"></div><div class="dot bg-yellow-500"></div><div class="dot bg-green-500"></div>
+            </div>
+            <pre class="p-4 text-sm text-green-400 overflow-x-auto"><code>export ANTHROPIC_API_KEY='sk-ant-...'
+bash start.sh</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="flex items-start gap-6">
+        <div class="w-8 h-8 bg-slate-900 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0 mt-1">3</div>
+        <div class="flex-1">
+          <h3 class="font-semibold text-slate-800 text-lg mb-2">Upload your FASTQ and wait</h3>
+          <p class="text-slate-500">
+            Open <code class="bg-slate-100 px-1.5 py-0.5 rounded">http://localhost:8000</code>,
+            drag and drop your FASTQ file, and the pipeline starts automatically.
+            You'll receive a detailed HTML report with QC metrics, AMR profile,
+            AI interpretation, and primer sequences.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Requirements -->
+    <div class="mt-12 bg-slate-50 rounded-2xl p-6 border border-slate-200">
+      <h3 class="font-semibold text-slate-800 mb-4">System requirements</h3>
+      <div class="grid md:grid-cols-2 gap-4 text-sm text-slate-600">
+        <div>
+          <div class="font-medium text-slate-700 mb-2">Minimum</div>
+          <ul class="space-y-1">
+            <li>• 8 CPU cores</li>
+            <li>• 16 GB RAM</li>
+            <li>• 50 GB free disk</li>
+            <li>• Docker or Conda (Miniconda3)</li>
+          </ul>
+        </div>
+        <div>
+          <div class="font-medium text-slate-700 mb-2">Recommended</div>
+          <ul class="space-y-1">
+            <li>• 16+ CPU cores</li>
+            <li>• 32 GB RAM</li>
+            <li>• 500 GB SSD</li>
+            <li>• Anthropic API key (for AI interpretation)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Footer ────────────────────────────────────────────────────────────── -->
+<footer class="bg-slate-900 text-slate-400 py-12 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="grid md:grid-cols-3 gap-8 mb-8">
+      <div>
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-xl">🧬</span>
+          <span class="text-white font-bold">GenomePlatform</span>
+        </div>
+        <p class="text-sm leading-relaxed">
+          Open-source bacterial genomic analysis platform.
+          Built for clinical microbiologists and researchers.
+        </p>
+      </div>
+      <div>
+        <div class="text-white font-semibold mb-3">Links</div>
+        <ul class="space-y-2 text-sm">
+          <li><a href="https://github.com/cinnetcrash/GenomePlatform" class="hover:text-white transition-colors">GitHub Repository</a></li>
+          <li><a href="https://github.com/cinnetcrash/GenomePlatform/issues" class="hover:text-white transition-colors">Report an Issue</a></li>
+          <li><a href="https://github.com/cinnetcrash/GenomePlatform/blob/main/LICENSE" class="hover:text-white transition-colors">MIT License</a></li>
+        </ul>
+      </div>
+      <div>
+        <div class="text-white font-semibold mb-3">Contact</div>
+        <p class="text-sm">
+          Gültekin Ünal<br>
+          <a href="mailto:cinnetcrash@gmail.com" class="hover:text-white transition-colors">
+            cinnetcrash@gmail.com
+          </a>
+        </p>
+        <p class="text-xs mt-3 text-slate-500">
+          ⚠ This tool is for research use only.<br>
+          Not validated for clinical diagnostics.
+        </p>
+      </div>
+    </div>
+    <div class="border-t border-slate-800 pt-6 text-center text-xs text-slate-600">
+      GenomePlatform v0.1 · MIT License · Built with FastAPI, Claude AI, Primer3, MAFFT
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
