@@ -18,8 +18,9 @@ import database as db
 from config import (
     ASSEMBLY_QC, ASSEMBLY_THREADS, AUTOCYCLER_BIN, BANDAGE_BIN,
     CHECKM2_DB, CHECKV_DB, CONDA_BASE,
-    HUMAN_DOMINANT_THRESHOLD, MAX_THREADS, RESULTS_DIR, SCRIPTS_DIR,
-    VIRAL_DOMINANT_THRESHOLD,
+    FLYE_ASM_COVERAGE, HUMAN_DOMINANT_THRESHOLD,
+    MAX_THREADS, RESULTS_DIR, SCRIPTS_DIR,
+    SHOVILL_ASSEMBLER, VIRAL_DOMINANT_THRESHOLD,
 )
 from security import safe_sample_name, sanitize_path
 
@@ -379,15 +380,21 @@ def stage_kraken2(job_id: str, fastq: Path, out_dir: Path,
 
 # ─── Assembly (Illumina + MinION / Autocycler) ────────────────────────────────
 
-def _run_flye(fastq: Path, out_dir: Path, mode: str, timeout: int = 10800) -> Path | None:
+def _run_flye(fastq: Path, out_dir: Path, mode: str, timeout: int = 10800,
+              genome_size: str = "5m") -> Path | None:
     """Runs Flye with the given mode flag; returns assembly FASTA path or None."""
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "flye", mode, sanitize_path(fastq),
-        "--out-dir", str(out_dir),
-        "--threads", str(ASSEMBLY_THREADS),
-        "--genome-size", "5m",
+        "--out-dir",     str(out_dir),
+        "--threads",     str(ASSEMBLY_THREADS),
+        "--genome-size", genome_size,
+        "--no-alt-contigs",          # skip alternative contigs — saves time/memory
     ]
+    if FLYE_ASM_COVERAGE > 0:
+        # Subsample reads to this coverage for initial assembly.
+        # Dramatically faster on high-coverage samples (>100x) with negligible quality loss.
+        cmd += ["--asm-coverage", str(FLYE_ASM_COVERAGE)]
     rc, out, err = _run(cmd, out_dir, timeout=timeout, env_name="analiz")
     fasta = out_dir / "assembly.fasta"
     if fasta.exists() and fasta.stat().st_size > 0:
@@ -481,9 +488,30 @@ def _run_autocycler(assemblies: list[Path], out_dir: Path) -> Path | None:
     return None
 
 
+def _estimate_genome_size(kraken2: dict | None) -> str:
+    """
+    Rough genome size estimate for Flye based on Kraken2 top hit.
+    Flye uses this only for coverage estimation — a rough value is fine.
+    Returns a string like "5m", "50k", "3m".
+    """
+    if not kraken2:
+        return "5m"
+    top = (kraken2.get("top_taxa") or [{}])[0]
+    name = top.get("name", "").lower()
+    # Phage / virus → ~50–200 kb
+    if any(w in name for w in ("phage", "virus", "viridae", "virales")):
+        return "200k"
+    # Human / mammal → ~3 Gb (unlikely to assemble well, but set something sane)
+    if any(w in name for w in ("homo", "human", "mus ", "rattus")):
+        return "3g"
+    # Typical bacteria → 2–7 Mb
+    return "5m"
+
+
 def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
                    read_type: str,
-                   fastq_r2: Path | None = None) -> tuple[Path | None, list]:
+                   fastq_r2: Path | None = None,
+                   kraken2: dict | None = None) -> tuple[Path | None, list]:
     """
     Assembly stage:
     - MinION  → Flye (--nano-raw) + Flye (--nano-hq) → Autocycler consensus
@@ -498,11 +526,14 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
     method = "unknown"
 
     if read_type == "minion":
+        gsize = _estimate_genome_size(kraken2)
+        logger.info("[%s] Assembly: Flye genome-size estimate: %s", job_id, gsize)
+
         logger.info("[%s] Assembly: running Flye --nano-raw", job_id)
-        flye_raw = _run_flye(fastq, asm_dir / "flye_raw", "--nano-raw")
+        flye_raw = _run_flye(fastq, asm_dir / "flye_raw", "--nano-raw", genome_size=gsize)
 
         logger.info("[%s] Assembly: running Flye --nano-hq", job_id)
-        flye_hq  = _run_flye(fastq, asm_dir / "flye_hq",  "--nano-hq")
+        flye_hq  = _run_flye(fastq, asm_dir / "flye_hq",  "--nano-hq",  genome_size=gsize)
 
         available = [f for f in [flye_raw, flye_hq] if f]
         if len(available) >= 2:
@@ -525,15 +556,29 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
             return None, []
 
     else:  # Illumina (SE or PE)
+        # Reserve ~90% of available RAM for SPAdes; prevents disk-swap slowdowns.
+        import psutil
+        avail_gb = max(4, int(psutil.virtual_memory().available / 1e9 * 0.90))
+
         cmd = [
             "shovill",
-            "--R1", sanitize_path(fastq),
-            "--outdir", str(asm_dir),
-            "--cpus", str(ASSEMBLY_THREADS),
+            "--R1",        sanitize_path(fastq),
+            "--outdir",    str(asm_dir),
+            "--cpus",      str(ASSEMBLY_THREADS),
+            "--ram",       str(avail_gb),
+            "--assembler", SHOVILL_ASSEMBLER,
+            "--noreadcorr",             # skip Shovill's lighter/trimmomatic step
+                                        # (fastp QC was already run upstream)
             "--force",
         ]
         if fastq_r2:
             cmd += ["--R2", sanitize_path(fastq_r2)]
+
+        # For spades backend: also skip BayesHammer error correction since
+        # fastp already trimmed and quality-filtered the reads.
+        if SHOVILL_ASSEMBLER == "spades":
+            cmd += ["--opts", "--only-assembler"]
+
         rc, out, err = _run(cmd, asm_dir, timeout=10800, env_name="shovill")
         candidates = list(asm_dir.glob("contigs.fa")) + list(asm_dir.glob("assembly.fasta"))
         if candidates:
@@ -1151,7 +1196,9 @@ def run_pipeline(job_id: str, fastq_path: Path,
 
         # ── 4. Assembly ───────────────────────────────────────────────────
         fasta, asm_qc = stage_assembly(
-            job_id, filtered_r1, out_dir, read_type, fastq_r2=filtered_r2
+            job_id, filtered_r1, out_dir, read_type,
+            fastq_r2=filtered_r2,
+            kraken2=results.get("kraken2"),
         )
         results["assembly_fasta"]    = str(fasta) if fasta else None
         results["assembly_qc_checks"] = asm_qc

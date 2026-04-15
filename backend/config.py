@@ -23,6 +23,15 @@ MAX_THREADS      = max(1, math.floor(_total_cpus * 0.80))   # general cap: 80%
 ASSEMBLY_THREADS = max(1, math.floor(_total_cpus * 0.85))   # assembly stages: 85%
 print(f"[config] CPU budget: {MAX_THREADS}/{_total_cpus} threads (80%) | assembly: {ASSEMBLY_THREADS} (85%)")
 
+# === Assembly Tuning ===
+# Shovill assembler backend: "spades" (accurate) or "megahit" (2-3x faster, slightly lower quality)
+SHOVILL_ASSEMBLER = os.getenv("SHOVILL_ASSEMBLER", "spades")
+
+# Flye assembly coverage cap (0 = use all reads).
+# For high-coverage MinION data (>100x), capping at 50x gives similar quality
+# but can cut runtime by 50-80%.
+FLYE_ASM_COVERAGE = int(os.getenv("FLYE_ASM_COVERAGE", "50"))
+
 # === Security ===
 MAX_FILE_SIZE_MB   = 2000
 ALLOWED_EXTENSIONS = {".fastq", ".fastq.gz", ".fq", ".fq.gz"}
