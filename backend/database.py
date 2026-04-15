@@ -22,22 +22,30 @@ def init_db() -> None:
     with get_conn() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS jobs (
-                id          TEXT PRIMARY KEY,
-                status      TEXT NOT NULL DEFAULT 'queued',
-                created_at  TEXT NOT NULL,
-                expires_at  TEXT NOT NULL,
-                filename    TEXT NOT NULL,
-                file_md5    TEXT,
-                ip_hash     TEXT NOT NULL,
-                read_type   TEXT,
-                stages      TEXT DEFAULT '{}',
-                error       TEXT,
-                report_path TEXT
+                id            TEXT PRIMARY KEY,
+                status        TEXT NOT NULL DEFAULT 'queued',
+                created_at    TEXT NOT NULL,
+                expires_at    TEXT NOT NULL,
+                filename      TEXT NOT NULL,
+                file_md5      TEXT,
+                ip_hash       TEXT NOT NULL,
+                read_type     TEXT,
+                stages        TEXT DEFAULT '{}',
+                error         TEXT,
+                report_path   TEXT,
+                files_deleted INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_expires ON jobs(expires_at);
             CREATE INDEX IF NOT EXISTS idx_ip      ON jobs(ip_hash);
         """)
+        # Migrate existing databases — safe no-op if column already present
+        try:
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN files_deleted INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass
     logger.info("Database ready: %s", DB_PATH)
 
 
@@ -113,6 +121,47 @@ def get_expired_jobs() -> list[dict]:
             (now,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_recent_jobs(limit: int = 20) -> list[dict]:
+    """Returns the most recent jobs ordered by creation time, excluding deleted."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT id, status, filename, read_type, created_at, expires_at,
+                      error, report_path, stages
+               FROM jobs
+               WHERE status != 'deleted'
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_overflow_jobs(keep: int = 10) -> list[dict]:
+    """
+    Returns finished jobs (completed/failed) beyond the most recent `keep`.
+    These are candidates for pruning — upload/result files are deleted but
+    the DB row and report HTML are preserved.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM jobs
+               WHERE status IN ('completed', 'failed')
+                 AND files_deleted = 0
+               ORDER BY created_at DESC
+               LIMIT -1 OFFSET ?""",
+            (keep,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_files_deleted(job_id: str) -> None:
+    """Marks a job's working files as deleted (report is kept)."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE jobs SET files_deleted = 1 WHERE id = ?", (job_id,)
+        )
 
 
 def mark_deleted(job_id: str) -> None:

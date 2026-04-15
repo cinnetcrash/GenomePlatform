@@ -429,6 +429,56 @@ async def assembly_graph(request: Request, job_id: str):
                         filename=f"assembly_graph_{job_id[:8]}.png")
 
 
+@app.get("/history")
+async def analysis_history():
+    """Returns the most recent analyses for the history panel."""
+    import json as _json
+    jobs = db.get_recent_jobs(limit=20)
+    result = []
+    for j in jobs:
+        stages = _json.loads(j["stages"]) if j["stages"] else {}
+        # Calculate elapsed time from first running stage to last updated
+        started_at = None
+        last_updated = None
+        for s in stages.values():
+            sa = s.get("started_at")
+            ua = s.get("updated_at")
+            if sa and (started_at is None or sa < started_at):
+                started_at = sa
+            if ua and (last_updated is None or ua > last_updated):
+                last_updated = ua
+
+        elapsed_sec = None
+        if started_at and last_updated:
+            try:
+                from datetime import datetime, timezone
+                fmt = "%Y-%m-%dT%H:%M:%S.%f%z"
+                def _parse(s):
+                    try:
+                        return datetime.fromisoformat(s)
+                    except Exception:
+                        return None
+                t0 = _parse(started_at)
+                t1 = _parse(last_updated)
+                if t0 and t1:
+                    elapsed_sec = int((t1 - t0).total_seconds())
+            except Exception:
+                pass
+
+        result.append({
+            "job_id":       j["id"],
+            "status":       j["status"],
+            "filename":     j["filename"],
+            "read_type":    j["read_type"],
+            "created_at":   j["created_at"],
+            "elapsed_sec":  elapsed_sec,
+            "has_report":   bool(j["report_path"]) and (j["files_deleted"] == 0 or
+                             (j["report_path"] and Path(j["report_path"]).exists())),
+            "error":        j["error"],
+        })
+    return JSONResponse({"analyses": result})
+
+
 @app.get("/system-stats")
 async def system_stats():
     """Returns CPU and disk usage for the server status widget."""
