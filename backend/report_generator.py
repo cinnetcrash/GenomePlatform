@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 
+import base64
+
 RISK_COLORS = {
     "LOW":      ("#22c55e", "#f0fdf4"),
     "MEDIUM":   ("#f59e0b", "#fffbeb"),
@@ -99,6 +101,35 @@ def _assembly_qc_section(qc_checks: list[dict]) -> str:
 
     return f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:.75rem">' \
            + "\n".join(cards) + "</div>"
+
+
+def _bandage_section(bandage: dict) -> str:
+    """Embeds the Bandage assembly graph image as base64 HTML, or returns a placeholder."""
+    if not bandage:
+        return ""
+    img_path = bandage.get("image_path")
+    if not img_path or not Path(img_path).exists():
+        err = bandage.get("error", "Graph image not available.")
+        return (
+            "<div class='section'>"
+            "<div class='section-title'>&#x1F5FA; Assembly Graph (Bandage)</div>"
+            "<div class='section-body'>"
+            f"<p style='color:#6b7280'>{err}</p>"
+            "</div></div>"
+        )
+    img_b64 = base64.b64encode(Path(img_path).read_bytes()).decode()
+    return (
+        "<div class='section'>"
+        "<div class='section-title'>&#x1F5FA; Assembly Graph (Bandage)</div>"
+        "<div class='section-body' style='text-align:center'>"
+        f"<img src='data:image/png;base64,{img_b64}' "
+        "style='max-width:100%;border-radius:8px;border:1px solid #e2e8f0' "
+        "alt='Assembly graph'>"
+        "<p style='font-size:.75rem;color:#94a3b8;margin-top:.5rem'>"
+        "Each node is a contig; edges represent overlaps. "
+        "Colour intensity reflects contig depth of coverage.</p>"
+        "</div></div>"
+    )
 
 
 def _mobsuite_section(mob: dict) -> str:
@@ -226,6 +257,7 @@ def generate_html_report(job_id: str,
     amr         = pipeline_results.get("amr", {})
     abricate    = pipeline_results.get("abricate") or {}
     mobsuite    = pipeline_results.get("mobsuite") or {}
+    bandage     = pipeline_results.get("bandage") or {}
     kraken2     = pipeline_results.get("kraken2") or {}
 
     risk        = ai_results.get("risk_level", "UNKNOWN").upper()
@@ -359,6 +391,9 @@ def generate_html_report(job_id: str,
       {_assembly_qc_section(pipeline_results.get("assembly_qc_checks", []))}
     </div>
   </div>
+
+  <!-- Assembly Graph -->
+  {_bandage_section(bandage)}
 
   <!-- MLST -->
   <div class="section">

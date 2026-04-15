@@ -17,10 +17,11 @@ SCRIPTS_DIR = Path("/home/analysis/Desktop/Scripts")
 for d in [UPLOAD_DIR, RESULTS_DIR, LOGS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-# === CPU Budget (80% of available cores) ===
-_total_cpus  = multiprocessing.cpu_count()
-MAX_THREADS  = max(1, math.floor(_total_cpus * 0.80))   # e.g. 16 cores → 12 threads
-print(f"[config] CPU budget: {MAX_THREADS}/{_total_cpus} threads (80%)")
+# === CPU Budget ===
+_total_cpus      = multiprocessing.cpu_count()
+MAX_THREADS      = max(1, math.floor(_total_cpus * 0.80))   # general cap: 80%
+ASSEMBLY_THREADS = max(1, math.floor(_total_cpus * 0.85))   # assembly stages: 85%
+print(f"[config] CPU budget: {MAX_THREADS}/{_total_cpus} threads (80%) | assembly: {ASSEMBLY_THREADS} (85%)")
 
 # === Security ===
 MAX_FILE_SIZE_MB   = 2000
@@ -59,6 +60,7 @@ TOOLS = {
 
 # === Autocycler ===
 AUTOCYCLER_BIN = Path("/home/analysis/Autocycler/target/release/autocycler")
+BANDAGE_BIN    = Path("/home/analysis/Desktop/Bandage")
 
 # === Kraken2 ===
 KRAKEN2_DEFAULT_DB = Path("/home/analysis/databases_all/kraken2_db")

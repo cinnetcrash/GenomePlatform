@@ -16,8 +16,8 @@ from typing import Any
 
 import database as db
 from config import (
-    ASSEMBLY_QC, AUTOCYCLER_BIN, CONDA_BASE,
-    MAX_THREADS, RESULTS_DIR, SCRIPTS_DIR,
+    ASSEMBLY_QC, ASSEMBLY_THREADS, AUTOCYCLER_BIN, BANDAGE_BIN,
+    CONDA_BASE, MAX_THREADS, RESULTS_DIR, SCRIPTS_DIR,
 )
 from security import safe_sample_name, sanitize_path
 
@@ -273,7 +273,7 @@ def _run_flye(fastq: Path, out_dir: Path, mode: str, timeout: int = 10800) -> Pa
     cmd = [
         "flye", mode, sanitize_path(fastq),
         "--out-dir", str(out_dir),
-        "--threads", str(MAX_THREADS),
+        "--threads", str(ASSEMBLY_THREADS),
         "--genome-size", "5m",
     ]
     rc, out, err = _run(cmd, out_dir, timeout=timeout, env_name="analiz")
@@ -308,7 +308,7 @@ def _run_autocycler(assemblies: list[Path], out_dir: Path) -> Path | None:
     rc, _, err = _run([ac, "compress",
                        "--assemblies_dir", str(staging),
                        "--autocycler_dir",  str(ac_dir),
-                       "--threads", str(MAX_THREADS)],
+                       "--threads", str(ASSEMBLY_THREADS)],
                       ac_dir, timeout=3600)
     if rc != 0:
         logger.warning("Autocycler compress failed: %s", err[-200:])
@@ -331,7 +331,7 @@ def _run_autocycler(assemblies: list[Path], out_dir: Path) -> Path | None:
     resolved_gfas: list[str] = []
     for cd in cluster_dirs:
         _run([ac, "trim", "--cluster_dir", str(cd),
-              "--threads", str(MAX_THREADS)], ac_dir, timeout=1800)
+              "--threads", str(ASSEMBLY_THREADS)], ac_dir, timeout=1800)
         _run([ac, "resolve", "--cluster_dir", str(cd)], ac_dir, timeout=1800)
         # Resolved GFA is the highest-numbered .gfa in the cluster dir
         gfas = sorted(cd.glob("*.gfa"))
@@ -416,7 +416,7 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
             "shovill",
             "--R1", sanitize_path(fastq),
             "--outdir", str(asm_dir),
-            "--cpus", str(MAX_THREADS),
+            "--cpus", str(ASSEMBLY_THREADS),
             "--force",
         ]
         rc, out, err = _run(cmd, asm_dir, timeout=10800, env_name="shovill")
@@ -452,6 +452,78 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
               "qc_checks": qc_checks}
     db.update_stage(job_id, "assembly", "done", json.dumps(detail))
     return fasta, qc_checks
+
+
+# ─── Bandage Graph Visualization ─────────────────────────────────────────────
+
+def _find_assembly_gfa(fasta: Path) -> Path | None:
+    """
+    Searches for the primary assembly graph GFA near the given FASTA.
+    Flye outputs assembly_graph.gfa in the same directory.
+    Autocycler leaves a consensus GFA in asm_dir/autocycler/.
+    """
+    asm_dir = fasta.parent
+
+    # Autocycler: consensus gfa next to the autocycler fasta
+    for gfa in asm_dir.glob("*.gfa"):
+        return gfa
+
+    # Flye: look in sub-directories
+    for subdir in [asm_dir / "flye_raw", asm_dir / "flye_hq"]:
+        g = subdir / "assembly_graph.gfa"
+        if g.exists():
+            return g
+
+    # Shovill: contigs.gfa
+    g = asm_dir / "contigs.gfa"
+    if g.exists():
+        return g
+
+    return None
+
+
+def stage_bandage(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
+    """
+    Generates a PNG image of the assembly graph using Bandage.
+    Returns {"image_path": str, "gfa_path": str} or {"error": ...}.
+    """
+    if not BANDAGE_BIN.exists():
+        return {"error": f"Bandage not found at {BANDAGE_BIN}"}
+
+    db.update_stage(job_id, "bandage", "running", "Rendering assembly graph…")
+
+    gfa = _find_assembly_gfa(fasta.parent)
+    if not gfa:
+        msg = "No assembly graph GFA found."
+        db.update_stage(job_id, "bandage", "skipped", msg)
+        return {"error": msg}
+
+    img_path = out_dir / "assembly_graph.png"
+    import os
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"   # headless Qt rendering
+
+    try:
+        result = subprocess.run(
+            [str(BANDAGE_BIN), "image", str(gfa), str(img_path),
+             "--width", "1400", "--height", "1000"],
+            capture_output=True, text=True, timeout=300, env=env,
+        )
+        if img_path.exists() and img_path.stat().st_size > 0:
+            db.update_stage(job_id, "bandage", "done",
+                            json.dumps({"image_path": str(img_path),
+                                        "gfa_path":   str(gfa)}))
+            logger.info("[%s] Bandage graph rendered: %s", job_id, img_path)
+            return {"image_path": str(img_path), "gfa_path": str(gfa)}
+
+        err = result.stderr[:300]
+        logger.warning("[%s] Bandage failed (rc=%d): %s", job_id, result.returncode, err)
+        db.update_stage(job_id, "bandage", "failed", err)
+        return {"error": err}
+
+    except subprocess.TimeoutExpired:
+        db.update_stage(job_id, "bandage", "failed", "Bandage timed out.")
+        return {"error": "Bandage timed out."}
 
 
 # ─── MLST ─────────────────────────────────────────────────────────────────────
@@ -802,15 +874,22 @@ def run_pipeline(job_id: str, fastq_path: Path,
             raise RuntimeError("Assembly failed — no output FASTA produced.")
         logger.info("[%s] Assembly: %s", job_id, fasta)
 
-        # 5. MLST
+        # 5. Bandage graph visualization
+        try:
+            results["bandage"] = stage_bandage(job_id, fasta, out_dir)
+        except Exception as band_err:
+            logger.warning("[%s] Bandage skipped: %s", job_id, band_err)
+            results["bandage"] = {"error": str(band_err)}
+
+        # 6. MLST
         results["mlst"] = stage_mlst(job_id, fasta, out_dir)
         logger.info("[%s] MLST: ST%s", job_id, results["mlst"].get("st"))
 
-        # 6. AMR
+        # 7. AMR
         results["amr"] = stage_amr(job_id, fasta, out_dir)
         logger.info("[%s] AMR: %d genes found.", job_id, results["amr"].get("count", 0))
 
-        # 7. Abricate (CARD always; VFDB if Kraken2 top genus is in VFDB)
+        # 8. Abricate (CARD always; VFDB if Kraken2 top genus is in VFDB)
         try:
             results["abricate"] = stage_abricate(
                 job_id, fasta, out_dir, results.get("kraken2")
@@ -820,7 +899,7 @@ def run_pipeline(job_id: str, fastq_path: Path,
             logger.warning("[%s] Abricate skipped: %s", job_id, abr_err)
             results["abricate"] = {"genes": [], "count": 0, "ran_vfdb": False, "top_genus": ""}
 
-        # 8. MOB-Suite (plasmid detection — optional)
+        # 9. MOB-Suite (plasmid detection — optional)
         try:
             results["mobsuite"] = stage_mobsuite(job_id, fasta, out_dir)
             logger.info("[%s] MOB-Suite: %d plasmid(s).", job_id,
@@ -829,7 +908,7 @@ def run_pipeline(job_id: str, fastq_path: Path,
             logger.warning("[%s] MOB-Suite skipped: %s", job_id, mob_err)
             results["mobsuite"] = {"plasmids": [], "plasmid_count": 0, "error": str(mob_err)}
 
-        # 9. Annotation (optional — continue even if it fails)
+        # 10. Annotation (optional — continue even if it fails)
         try:
             results["annotation"] = str(
                 stage_annotation(job_id, fasta, out_dir, sample_name)

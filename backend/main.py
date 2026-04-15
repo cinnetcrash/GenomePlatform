@@ -339,6 +339,31 @@ async def download_report(request: Request, job_id: str):
     )
 
 
+@app.get("/assembly-graph/{job_id}")
+async def assembly_graph(request: Request, job_id: str):
+    """Serves the Bandage assembly graph PNG for a completed job."""
+    import re
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise HTTPException(status_code=400, detail="Invalid job ID.")
+    job = db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    import json as _json
+    stages = _json.loads(job["stages"]) if job["stages"] else {}
+    bandage = stages.get("bandage", {})
+    detail = _json.loads(bandage.get("detail", "{}")) if bandage.get("detail") else {}
+    image_path = detail.get("image_path")
+
+    if not image_path:
+        raise HTTPException(status_code=404, detail="Assembly graph image not available.")
+    img = Path(image_path)
+    if not img.exists():
+        raise HTTPException(status_code=410, detail="Assembly graph image has been deleted.")
+    return FileResponse(path=str(img), media_type="image/png",
+                        filename=f"assembly_graph_{job_id[:8]}.png")
+
+
 @app.get("/system-stats")
 async def system_stats():
     """Returns CPU and disk usage for the server status widget."""

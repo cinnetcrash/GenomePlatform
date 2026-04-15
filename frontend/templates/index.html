@@ -229,6 +229,21 @@
         <div id="asm-qc-checks" class="flex flex-wrap gap-2"></div>
       </div>
 
+      <!-- Assembly Graph -->
+      <div id="bandage-section" class="hidden px-8 pt-4 pb-2">
+        <div class="section-header">🗺 Assembly Graph (Bandage)</div>
+        <div class="text-center">
+          <img id="bandage-img" src="" alt="Assembly graph"
+               class="max-w-full rounded-xl border border-slate-200 shadow-sm mx-auto">
+          <p class="text-xs text-slate-400 mt-2">
+            Each node is a contig · edge = overlap · colour depth = coverage
+          </p>
+          <a id="bandage-dl" href="#" download class="inline-block mt-2 text-xs text-indigo-500 hover:underline">
+            ⬇ Download image
+          </a>
+        </div>
+      </div>
+
       <!-- MLST + AMR -->
       <div class="px-8 pt-5 pb-2 grid grid-cols-1 sm:grid-cols-2 gap-6">
         <div>
@@ -330,6 +345,7 @@ const STAGE_LABELS = {
   kraken2:    "🦠 Taxonomic Classification (Kraken2)",
   qc:         "📊 Quality Control (QC)",
   assembly:   "🔧 Genome Assembly (Flye + Autocycler)",
+  bandage:    "🗺 Assembly Graph (Bandage)",
   mlst:       "🔬 MLST Typing",
   amr:        "💊 AMR Gene Detection",
   abricate:   "🧫 Virulence & Resistance Screen (Abricate)",
@@ -625,6 +641,15 @@ function showResults(jobId, stages) {
   if (qcData.q30_rate !== undefined)        qcCards += metricCard('Q30 Rate', qcData.q30_rate+'%');
   if (qcData.n50 !== undefined)             qcCards += metricCard('Read N50', fmt(Number(qcData.n50)), 'bp');
   document.getElementById('qc-grid').innerHTML = qcCards;
+
+  // Bandage graph image
+  if (stages.bandage?.status === 'done') {
+    const imgUrl = `/assembly-graph/${jobId}`;
+    const bandageEl = document.getElementById('bandage-section');
+    bandageEl.classList.remove('hidden');
+    document.getElementById('bandage-img').src = imgUrl;
+    document.getElementById('bandage-dl').href = imgUrl;
+  }
 
   // Assembly stats
   const asmData = tryJSON(stages.assembly?.detail) || {};
