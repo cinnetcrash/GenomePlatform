@@ -1,6 +1,6 @@
 """
-Claude API ile klinik yorum üretimi.
-Pipeline sonuçlarını alır, yapılandırılmış bir yorum döndürür.
+Clinical interpretation using the Claude API.
+Receives pipeline results and returns a structured interpretation.
 """
 import json
 import logging
@@ -14,77 +14,77 @@ logger = logging.getLogger("ai_interpreter")
 
 
 def _build_prompt(results: dict[str, Any]) -> str:
-    """Pipeline sonuçlarından klinik yorum için sistem promptu oluşturur."""
+    """Builds the clinical interpretation prompt from pipeline results."""
 
     mlst    = results.get("mlst", {})
     amr     = results.get("amr", {})
     qc      = results.get("qc", {})
     rtype   = results.get("read_type", "unknown")
-    sample  = results.get("sample_name", "Bilinmeyen")
+    sample  = results.get("sample_name", "Unknown")
 
     amr_genes = amr.get("genes", [])
     amr_summary = "\n".join(
-        f"  - {g['gene']} | Sınıf: {g['class']} | Kimlik: {g['identity']}%"
+        f"  - {g['gene']} | Class: {g['class']} | Identity: {g['identity']}%"
         for g in amr_genes
-    ) or "  AMR geni tespit edilmedi."
+    ) or "  No AMR genes detected."
 
-    prompt = f"""Sen bir klinik mikrobiyoloji uzmanısın.
-Aşağıdaki genomik analiz sonuçlarını incele ve kapsamlı bir klinik yorum yaz.
+    prompt = f"""You are a clinical microbiology expert.
+Review the following genomic analysis results and provide a comprehensive clinical interpretation.
 
-## Örnek Bilgisi
-- Örnek adı: {sample}
-- Okuma tipi: {rtype}
+## Sample Information
+- Sample name: {sample}
+- Read type: {rtype}
 
-## QC Metrikleri
+## QC Metrics
 {json.dumps(qc, indent=2, ensure_ascii=False)}
 
-## MLST Tiplemesi
-- Şema: {mlst.get('scheme', 'Tespit edilemedi')}
-- ST tipi: {mlst.get('st', 'Tespit edilemedi')}
-- Alleller: {', '.join(mlst.get('alleles', []))}
+## MLST Typing
+- Scheme: {mlst.get('scheme', 'Not determined')}
+- Sequence type: {mlst.get('st', 'Not determined')}
+- Alleles: {', '.join(mlst.get('alleles', []))}
 
-## AMR Genleri ({amr.get('count', 0)} gen)
+## AMR Genes ({amr.get('count', 0)} genes)
 {amr_summary}
 
-## İstenen Çıktı (JSON formatında yanıt ver):
+## Required Output (respond in JSON format):
 {{
-  "species_prediction": "Tahmin edilen tür veya yakın akraba",
-  "clinical_significance": "Bu izolatın klinik önemi (2-3 cümle)",
-  "resistance_profile": "Direnç profilinin özeti",
-  "treatment_implications": "Tedavi seçenekleri ve öneriler",
-  "epidemiology": "Epidemiyolojik önem (lineage, klonal kompleks vb.)",
+  "species_prediction": "Predicted species or closest relative",
+  "clinical_significance": "Clinical significance of this isolate (2-3 sentences)",
+  "resistance_profile": "Summary of resistance profile",
+  "treatment_implications": "Treatment options and recommendations",
+  "epidemiology": "Epidemiological significance (lineage, clonal complex, etc.)",
   "pcr_targets": [
     {{
-      "gene": "Hedef gen adı",
-      "rationale": "Neden bu gen PCR için önerildi",
-      "clinical_use": "Bu PCR'ın klinik/epidemiyolojik kullanımı"
+      "gene": "Target gene name",
+      "rationale": "Why this gene is recommended for PCR",
+      "clinical_use": "Clinical/epidemiological application of this PCR"
     }}
   ],
   "risk_level": "LOW | MEDIUM | HIGH | CRITICAL",
-  "summary": "Genel özet (İngilizce, yayına uygun dil)"
+  "summary": "Overall summary (English, publication-ready language)"
 }}
 
-Sadece JSON döndür, başka metin ekleme."""
+Return only JSON, no additional text."""
 
     return prompt
 
 
 def interpret(results: dict[str, Any]) -> dict[str, Any]:
     """
-    Claude API'ye analiz sonuçlarını gönderir, yapılandırılmış yorum alır.
-    API anahtarı yoksa fallback mesaj döndürür.
+    Sends analysis results to the Claude API and returns a structured interpretation.
+    Returns a fallback message if the API key is not configured.
     """
     if not ANTHROPIC_API_KEY:
-        logger.warning("ANTHROPIC_API_KEY ayarlanmamış — AI yorumu atlanıyor.")
+        logger.warning("ANTHROPIC_API_KEY not set — skipping AI interpretation.")
         return {
-            "species_prediction": "API anahtarı gerekli",
-            "clinical_significance": "AI yorumu için ANTHROPIC_API_KEY ortam değişkenini ayarlayın.",
+            "species_prediction": "API key required",
+            "clinical_significance": "Set the ANTHROPIC_API_KEY environment variable to enable AI interpretation.",
             "resistance_profile": "",
             "treatment_implications": "",
             "epidemiology": "",
             "pcr_targets": [],
             "risk_level": "UNKNOWN",
-            "summary": "AI yorum servisi devre dışı.",
+            "summary": "AI interpretation service is disabled.",
         }
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -98,7 +98,7 @@ def interpret(results: dict[str, Any]) -> dict[str, Any]:
         )
         raw = message.content[0].text.strip()
 
-        # JSON bloğunu temizle (```json ... ``` varsa)
+        # Strip markdown code fences if present (```json ... ```)
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -106,17 +106,17 @@ def interpret(results: dict[str, Any]) -> dict[str, Any]:
         raw = raw.strip()
 
         interpretation = json.loads(raw)
-        logger.info("AI yorumu başarıyla alındı.")
+        logger.info("AI interpretation received successfully.")
         return interpretation
 
     except json.JSONDecodeError as e:
-        logger.error("AI yanıtı JSON ayrıştırılamadı: %s", e)
+        logger.error("Failed to parse AI response as JSON: %s", e)
         return {"summary": raw, "risk_level": "UNKNOWN", "pcr_targets": []}
 
     except anthropic.APIError as e:
-        logger.error("Claude API hatası: %s", e)
+        logger.error("Claude API error: %s", e)
         return {
-            "summary": f"API hatası: {e}",
+            "summary": f"API error: {e}",
             "risk_level": "UNKNOWN",
             "pcr_targets": [],
         }

@@ -5,5 +5,6 @@ python-multipart==0.0.18    # >=0.0.18 fixes arbitrary file write + DoS CVEs
 aiofiles==24.1.0
 jinja2==3.1.6               # >=3.1.5 fixes sandbox breakout CVEs
 slowapi==0.1.9
-# python-jose kaldırıldı (açık CVE'ler var, henüz kullanılmıyor)
-# İleride JWT auth gerekirse pyjwt kullanılacak
+psutil>=5.9.0               # CPU and disk usage reporting
+# python-jose removed (unpatched CVEs, not currently used)
+# Use pyjwt if JWT auth is needed in the future

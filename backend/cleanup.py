@@ -1,7 +1,7 @@
 """
-24 saatlik otomatik silme sistemi.
-Arka planda çalışan bir thread her 10 dakikada bir
-süresi dolmuş işleri ve dosyalarını siler.
+24-hour automatic file deletion system.
+A background thread sweeps every 10 minutes to delete
+expired jobs and their associated files.
 """
 import shutil
 import logging
@@ -14,55 +14,55 @@ from config import UPLOAD_DIR, RESULTS_DIR
 
 logger = logging.getLogger("cleanup")
 
-SWEEP_INTERVAL_SEC = 600   # Her 10 dakikada bir tara
+SWEEP_INTERVAL_SEC = 600   # Sweep every 10 minutes
 
 
 def delete_job_files(job_id: str) -> None:
-    """Bir işe ait tüm dosya ve dizinleri güvenli biçimde siler."""
+    """Safely deletes all files and directories associated with a job."""
     deleted = []
 
     for base_dir in [UPLOAD_DIR, RESULTS_DIR]:
         job_dir = base_dir / job_id
         if job_dir.exists() and job_dir.is_dir():
-            # Sembolik link değil mi kontrol et (path traversal güvenliği)
+            # Guard against symlink-based path traversal
             if not job_dir.is_symlink():
                 shutil.rmtree(job_dir, ignore_errors=True)
                 deleted.append(str(job_dir))
 
     if deleted:
-        logger.info("İş %s silindi: %s", job_id, deleted)
+        logger.info("Job %s deleted: %s", job_id, deleted)
     else:
-        logger.debug("İş %s için silinecek dosya bulunamadı.", job_id)
+        logger.debug("No files found to delete for job %s.", job_id)
 
 
 def sweep() -> None:
-    """Süresi dolmuş tüm işleri temizler."""
+    """Cleans up all expired jobs."""
     expired = db.get_expired_jobs()
     if not expired:
         return
 
-    logger.info("%d adet süresi dolmuş iş bulundu.", len(expired))
+    logger.info("Found %d expired job(s).", len(expired))
     for job in expired:
         try:
             delete_job_files(job["id"])
             db.mark_deleted(job["id"])
         except Exception as exc:
-            logger.error("İş %s silinemedi: %s", job["id"], exc)
+            logger.error("Failed to delete job %s: %s", job["id"], exc)
 
 
 def _sweep_loop() -> None:
-    """Arka plan thread döngüsü."""
-    logger.info("Temizleme servisi başlatıldı (her %ds).", SWEEP_INTERVAL_SEC)
+    """Background thread loop."""
+    logger.info("Cleanup service started (every %ds).", SWEEP_INTERVAL_SEC)
     while True:
         try:
             sweep()
         except Exception as exc:
-            logger.error("Sweep hatası: %s", exc)
+            logger.error("Sweep error: %s", exc)
         time.sleep(SWEEP_INTERVAL_SEC)
 
 
 def start_cleanup_thread() -> threading.Thread:
-    """Arka plan temizleme thread'ini başlatır ve döndürür."""
+    """Starts and returns the background cleanup thread."""
     t = threading.Thread(target=_sweep_loop, daemon=True, name="cleanup-sweep")
     t.start()
     return t

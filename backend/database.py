@@ -1,5 +1,5 @@
 """
-SQLite veritabanı — iş durumu ve zaman damgaları.
+SQLite database — job status and timestamps.
 """
 import sqlite3
 import json
@@ -18,7 +18,7 @@ def get_conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Veritabanı tablolarını oluştur (yoksa)."""
+    """Creates database tables if they do not exist."""
     with get_conn() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS jobs (
@@ -38,7 +38,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_expires ON jobs(expires_at);
             CREATE INDEX IF NOT EXISTS idx_ip      ON jobs(ip_hash);
         """)
-    logger.info("Veritabanı hazır: %s", DB_PATH)
+    logger.info("Database ready: %s", DB_PATH)
 
 
 def create_job(job_id: str, filename: str, expires_at: str,
@@ -74,7 +74,7 @@ def update_job_status(job_id: str, status: str,
 
 def update_stage(job_id: str, stage: str, status: str,
                  detail: str = "") -> None:
-    """Pipeline aşamasını günceller."""
+    """Updates a pipeline stage entry."""
     with get_conn() as conn:
         row = conn.execute(
             "SELECT stages FROM jobs WHERE id = ?", (job_id,)
@@ -98,7 +98,7 @@ def get_job(job_id: str) -> dict | None:
 
 
 def get_expired_jobs() -> list[dict]:
-    """Süresi geçmiş işleri döndürür."""
+    """Returns all jobs whose expiry time has passed."""
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
         rows = conn.execute(
@@ -116,7 +116,7 @@ def mark_deleted(job_id: str) -> None:
 
 
 def count_active_jobs_for_ip(ip_hash: str) -> int:
-    """Aynı IP'den kaç aktif iş var?"""
+    """Returns the number of active jobs for a given IP hash."""
     with get_conn() as conn:
         row = conn.execute(
             """SELECT COUNT(*) as n FROM jobs

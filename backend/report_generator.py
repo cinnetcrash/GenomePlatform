@@ -1,6 +1,6 @@
 """
-HTML rapor üretici.
-Pipeline + AI + Primer sonuçlarından tek bir HTML rapor oluşturur.
+HTML report generator.
+Combines pipeline + AI + primer results into a single HTML report.
 """
 import json
 from datetime import datetime, timezone
@@ -19,7 +19,7 @@ RISK_COLORS = {
 
 def _primer_rows(primer_list: list[dict]) -> str:
     if not primer_list:
-        return "<p style='color:#6b7280'>Primer tasarımlayacak veri bulunamadı.</p>"
+        return "<p style='color:#6b7280'>No data available for primer design.</p>"
 
     rows = []
     for gene_result in primer_list:
@@ -31,9 +31,9 @@ def _primer_rows(primer_list: list[dict]) -> str:
 
         rows.append(f"""
         <div class="gene-block">
-          <h3>🧬 {gene}</h3>
-          <p><small>Dizi sayısı: {n_seqs} |
-             Korunmuş bölge: {cons or '—'} bp
+          <h3>&#x1F9EC; {gene}</h3>
+          <p><small>Sequences: {n_seqs} |
+             Conserved region: {cons or '&mdash;'} bp
              {f'| <em>{note}</em>' if note else ''}</small></p>
         """)
 
@@ -42,8 +42,8 @@ def _primer_rows(primer_list: list[dict]) -> str:
           <table>
             <thead>
               <tr>
-                <th>#</th><th>Yön</th><th>Dizi (5'→3')</th>
-                <th>Tm (°C)</th><th>GC%</th><th>Amplikon (bp)</th>
+                <th>#</th><th>Direction</th><th>Sequence (5'&rarr;3')</th>
+                <th>Tm (&deg;C)</th><th>GC%</th><th>Amplicon (bp)</th>
               </tr>
             </thead><tbody>""")
             for p in pairs:
@@ -52,19 +52,19 @@ def _primer_rows(primer_list: list[dict]) -> str:
                 <td rowspan="2">{p['pair']}</td>
                 <td>Forward</td>
                 <td><code>{p['forward']}</code></td>
-                <td>{p['fwd_tm'] or '—'}</td>
-                <td>{p['fwd_gc'] or '—'}</td>
-                <td rowspan="2">{p['amplikon'] or '—'}</td>
+                <td>{p['fwd_tm'] or '&mdash;'}</td>
+                <td>{p['fwd_gc'] or '&mdash;'}</td>
+                <td rowspan="2">{p['amplicon'] or '&mdash;'}</td>
               </tr>
               <tr>
                 <td>Reverse</td>
                 <td><code>{p['reverse']}</code></td>
-                <td>{p['rev_tm'] or '—'}</td>
-                <td>{p['rev_gc'] or '—'}</td>
+                <td>{p['rev_tm'] or '&mdash;'}</td>
+                <td>{p['rev_gc'] or '&mdash;'}</td>
               </tr>""")
             rows.append("</tbody></table>")
         else:
-            rows.append("<p><em>Bu gen için primer tasarlanamadı.</em></p>")
+            rows.append("<p><em>No primers could be designed for this gene.</em></p>")
 
         rows.append("</div>")
     return "\n".join(rows)
@@ -72,11 +72,11 @@ def _primer_rows(primer_list: list[dict]) -> str:
 
 def _amr_table(genes: list[dict]) -> str:
     if not genes:
-        return "<p style='color:#22c55e'>✅ AMR geni tespit edilmedi.</p>"
+        return "<p style='color:#22c55e'>&#x2705; No AMR genes detected.</p>"
 
     rows = ["<table><thead><tr>"
-            "<th>Gen</th><th>Sınıf</th><th>Alt Sınıf</th>"
-            "<th>%Kimlik</th><th>Yöntem</th>"
+            "<th>Gene</th><th>Class</th><th>Subclass</th>"
+            "<th>% Identity</th><th>Method</th>"
             "</tr></thead><tbody>"]
     for g in genes:
         rows.append(
@@ -96,9 +96,9 @@ def generate_html_report(job_id: str,
                           pipeline_results: dict[str, Any],
                           ai_results: dict[str, Any],
                           primer_results: list[dict]) -> str:
-    """Tam HTML raporu string olarak döndürür."""
+    """Returns the complete HTML report as a string."""
 
-    sample      = pipeline_results.get("sample_name", "Bilinmeyen")
+    sample      = pipeline_results.get("sample_name", "Unknown")
     read_type   = pipeline_results.get("read_type", "?")
     qc          = pipeline_results.get("qc", {})
     mlst        = pipeline_results.get("mlst", {})
@@ -109,7 +109,7 @@ def generate_html_report(job_id: str,
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    # AI PCR hedefleri
+    # AI PCR targets table rows
     pcr_targets = ai_results.get("pcr_targets", [])
     pcr_rows = ""
     for t in pcr_targets:
@@ -120,11 +120,11 @@ def generate_html_report(job_id: str,
         )
 
     html = f"""<!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GenomePlatform — {sample}</title>
+  <title>LycianWay &mdash; {sample}</title>
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
@@ -197,9 +197,9 @@ def generate_html_report(job_id: str,
 <body>
 
 <div class="header">
-  <h1>🧬 Genomik Analiz Raporu</h1>
-  <p>Örnek: <strong>{sample}</strong> &nbsp;|&nbsp; İş ID: {job_id} &nbsp;|&nbsp; {now}</p>
-  <p>Okuma tipi: {read_type.upper()}</p>
+  <h1>&#x1F9EC; LycianWay &mdash; Genomic Analysis Report</h1>
+  <p>Sample: <strong>{sample}</strong> &nbsp;|&nbsp; Job ID: {job_id} &nbsp;|&nbsp; {now}</p>
+  <p>Read type: {read_type.upper()}</p>
   <div class="risk-badge">Risk: {risk}</div>
 </div>
 
@@ -207,89 +207,89 @@ def generate_html_report(job_id: str,
 
   <!-- QC -->
   <div class="section">
-    <div class="section-title">📊 Kalite Kontrol (QC)</div>
+    <div class="section-title">&#x1F4CA; Quality Control (QC)</div>
     <div class="section-body">
       <div class="grid-2">
         {''.join(
             f'<div class="metric"><div class="metric-label">{k.replace("_"," ").title()}</div>'
             f'<div class="metric-value">{v}</div></div>'
             for k, v in qc.items()
-        ) or '<p style="color:#6b7280">QC verisi bulunamadı.</p>'}
+        ) or '<p style="color:#6b7280">No QC data available.</p>'}
       </div>
     </div>
   </div>
 
   <!-- MLST -->
   <div class="section">
-    <div class="section-title">🔬 MLST Tiplemesi</div>
+    <div class="section-title">&#x1F52C; MLST Typing</div>
     <div class="section-body">
       <div class="grid-2">
         <div class="metric">
-          <div class="metric-label">Şema</div>
-          <div class="metric-value">{mlst.get('scheme','—')}</div>
+          <div class="metric-label">Scheme</div>
+          <div class="metric-value">{mlst.get('scheme','&mdash;')}</div>
         </div>
         <div class="metric">
-          <div class="metric-label">Sekans Tipi (ST)</div>
-          <div class="metric-value">{mlst.get('st','—')}</div>
+          <div class="metric-label">Sequence Type (ST)</div>
+          <div class="metric-value">{mlst.get('st','&mdash;')}</div>
         </div>
       </div>
-      {f'<p style="margin-top:.8rem">Alleller: <code>{", ".join(mlst.get("alleles",[]))}</code></p>' if mlst.get("alleles") else ''}
+      {f'<p style="margin-top:.8rem">Alleles: <code>{", ".join(mlst.get("alleles",[]))}</code></p>' if mlst.get("alleles") else ''}
     </div>
   </div>
 
   <!-- AMR -->
   <div class="section">
-    <div class="section-title">💊 Antimikrobiyal Direnç Genleri ({amr.get('count',0)} gen)</div>
+    <div class="section-title">&#x1F48A; Antimicrobial Resistance Genes ({amr.get('count',0)} genes)</div>
     <div class="section-body">
       {_amr_table(amr.get('genes', []))}
     </div>
   </div>
 
-  <!-- AI Yorum -->
+  <!-- AI Interpretation -->
   <div class="section">
-    <div class="section-title">🤖 AI Klinik Yorumu</div>
+    <div class="section-title">&#x1F916; AI Clinical Interpretation</div>
     <div class="section-body">
       <div class="ai-text">
-        <strong>Tür Tahmini:</strong> {ai_results.get('species_prediction','—')}
+        <strong>Species Prediction:</strong> {ai_results.get('species_prediction','&mdash;')}
       </div>
       <div class="ai-text">
-        <strong>Klinik Önem:</strong><br>{ai_results.get('clinical_significance','—')}
+        <strong>Clinical Significance:</strong><br>{ai_results.get('clinical_significance','&mdash;')}
       </div>
       <div class="ai-text">
-        <strong>Direnç Profili:</strong><br>{ai_results.get('resistance_profile','—')}
+        <strong>Resistance Profile:</strong><br>{ai_results.get('resistance_profile','&mdash;')}
       </div>
       <div class="ai-text">
-        <strong>Tedavi Önerileri:</strong><br>{ai_results.get('treatment_implications','—')}
+        <strong>Treatment Implications:</strong><br>{ai_results.get('treatment_implications','&mdash;')}
       </div>
       <div class="ai-text">
-        <strong>Epidemiyoloji:</strong><br>{ai_results.get('epidemiology','—')}
+        <strong>Epidemiology:</strong><br>{ai_results.get('epidemiology','&mdash;')}
       </div>
       {f'''
-      <h4 style="margin-top:1rem">Önerilen PCR Hedefleri</h4>
+      <h4 style="margin-top:1rem">Recommended PCR Targets</h4>
       <table>
-        <thead><tr><th>Gen</th><th>Neden?</th><th>Klinik Kullanım</th></tr></thead>
+        <thead><tr><th>Gene</th><th>Rationale</th><th>Clinical Use</th></tr></thead>
         <tbody>{pcr_rows}</tbody>
       </table>''' if pcr_rows else ''}
     </div>
   </div>
 
-  <!-- Primerler -->
+  <!-- Primers -->
   <div class="section">
-    <div class="section-title">🧪 PCR Primer Tasarımı</div>
+    <div class="section-title">&#x1F9EA; PCR Primer Design</div>
     <div class="section-body">
       {_primer_rows(primer_results)}
     </div>
   </div>
 
-  <!-- Özet -->
+  <!-- Summary -->
   <div class="section">
-    <div class="section-title">📝 Genel Özet</div>
+    <div class="section-title">&#x1F4DD; Overall Summary</div>
     <div class="section-body">
-      <div class="ai-text">{ai_results.get('summary','—')}</div>
+      <div class="ai-text">{ai_results.get('summary','&mdash;')}</div>
       <p style="margin-top:1rem;font-size:.8rem;color:#94a3b8">
-        ⚠️ Bu rapor otomatik analiz sistemi tarafından üretilmiştir.
-        Klinik kararlar için uzman değerlendirmesi gereklidir.
-        Veriler 24 saat sonra otomatik silinecektir.
+        &#x26A0;&#xFE0F; This report was generated by an automated analysis system.
+        Expert review is required for clinical decision-making.
+        All data will be automatically deleted after 24 hours.
       </p>
     </div>
   </div>
@@ -297,7 +297,7 @@ def generate_html_report(job_id: str,
 </div>
 
 <div class="footer">
-  GenomePlatform • {now} • Job: {job_id}
+  LycianWay &bull; {now} &bull; Job: {job_id}
 </div>
 
 </body>
@@ -307,7 +307,7 @@ def generate_html_report(job_id: str,
 
 
 def save_report(job_id: str, html_content: str, out_dir: Path) -> Path:
-    """Raporu diske kaydeder, yolunu döndürür."""
+    """Saves the report to disk and returns the path."""
     report_path = out_dir / "report.html"
     report_path.write_text(html_content, encoding="utf-8")
     return report_path
