@@ -110,7 +110,8 @@ def _resolve_kraken2_db(raw: str) -> Path | None:
 
 def _run_full_pipeline(job_id: str, fastq_path: Path,
                        fastq_r2: Path | None = None,
-                       kraken2_db: Path | None = None) -> None:
+                       kraken2_db: Path | None = None,
+                       sample_type: str = "auto") -> None:
     """Runs the full pipeline + AI interpretation in a background thread."""
     try:
         logger.info("[%s] Pipeline starting: %s%s", job_id, fastq_path,
@@ -121,7 +122,8 @@ def _run_full_pipeline(job_id: str, fastq_path: Path,
         # 1. Genomic pipeline
         pipeline_results = run_pipeline(job_id, fastq_path,
                                         fastq_r2=fastq_r2,
-                                        kraken2_db=kraken2_db)
+                                        kraken2_db=kraken2_db,
+                                        sample_type=sample_type)
         if pipeline_results.get("error"):
             return
 
@@ -209,9 +211,10 @@ async def _save_upload(upload: UploadFile, dest: Path) -> int:
 @limiter.limit(RATE_LIMIT)
 async def upload_fastq(
     request: Request,
-    file:    UploadFile = File(...),
-    file_r2: Optional[UploadFile] = File(default=None),
-    kraken2_db: str = Form(default=""),
+    file:        UploadFile = File(...),
+    file_r2:     Optional[UploadFile] = File(default=None),
+    kraken2_db:  str = Form(default=""),
+    sample_type: str = Form(default="auto"),
 ):
     """
     Securely uploads FASTQ/FASTQ.gz file(s) and starts the analysis pipeline.
@@ -287,7 +290,7 @@ async def upload_fastq(
 
     t = threading.Thread(
         target=_run_full_pipeline,
-        args=(job_id, dest, dest_r2, resolved_db),
+        args=(job_id, dest, dest_r2, resolved_db, sample_type),
         daemon=True,
         name=f"pipeline-{job_id[:8]}",
     )

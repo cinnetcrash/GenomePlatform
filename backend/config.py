@@ -62,6 +62,14 @@ TOOLS = {
 AUTOCYCLER_BIN = Path("/home/analysis/Autocycler/target/release/autocycler")
 BANDAGE_BIN    = Path("/home/analysis/Desktop/Bandage")
 
+# === Quality Assessment Tools ===
+CHECKM2_DB     = Path("/home/analysis/databases_all/bact_databases_ALL/checkm2_v2_20210323/uniref100.KO.1.dmnd")
+CHECKV_DB      = Path("/home/analysis/databases_all/checkv_db")   # set if downloaded
+
+# Thresholds for genomic context decision (from Kraken2 results)
+VIRAL_DOMINANT_THRESHOLD = 50.0   # % viral reads → skip bacterial steps
+HUMAN_DOMINANT_THRESHOLD = 40.0   # % human reads → warn + skip bacterial steps
+
 # === Kraken2 ===
 KRAKEN2_DEFAULT_DB = Path("/home/analysis/databases_all/kraken2_db")
 

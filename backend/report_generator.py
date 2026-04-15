@@ -103,6 +103,104 @@ def _assembly_qc_section(qc_checks: list[dict]) -> str:
            + "\n".join(cards) + "</div>"
 
 
+def _context_banner(gctx: dict) -> str:
+    """Shows a coloured banner when bacterial steps were skipped."""
+    if not gctx or not gctx.get("skip_bacterial"):
+        return ""
+    ctx = gctx.get("context", "")
+    color = "#f59e0b" if ctx == "metagenomics" else "#ef4444"
+    bg    = "#fffbeb" if ctx == "metagenomics" else "#fef2f2"
+    icon  = "⚠️" if ctx == "metagenomics" else "🛑"
+    return (
+        f"<div class='section'><div class='section-body' style='"
+        f"background:{bg};border-left:4px solid {color};padding:1rem 1.2rem;"
+        f"border-radius:0 8px 8px 0'>"
+        f"<strong style='color:{color}'>{icon} Genomic Context: {ctx.replace('_',' ').title()}</strong><br>"
+        f"<span style='font-size:.88rem'>{gctx.get('reason','')}</span>"
+        f"</div></div>"
+    )
+
+
+def _quast_section(quast: dict) -> str:
+    """Renders QUAST assembly quality metrics."""
+    if not quast:
+        return "<p style='color:#6b7280'>QUAST was not run.</p>"
+    label_map = {
+        "contigs":        ("# Contigs",       ""),
+        "total_length":   ("Total Length",     "bp"),
+        "largest_contig": ("Largest Contig",   "bp"),
+        "n50":            ("N50",              "bp"),
+        "n90":            ("N90",              "bp"),
+        "l50":            ("L50",              ""),
+        "gc_pct":         ("GC Content",       "%"),
+        "ns_per_100k":    ("Ns per 100 kbp",   ""),
+    }
+    cards = []
+    for key, (label, unit) in label_map.items():
+        val = quast.get(key, "—")
+        if val == "—" or val is None:
+            continue
+        # Format numbers
+        try:
+            n = float(str(val).replace(",", ""))
+            if unit == "bp":
+                if n >= 1e6:  val = f"{n/1e6:.2f} Mb"
+                elif n >= 1e3: val = f"{n/1e3:.1f} kb"
+                else:          val = f"{int(n)} bp"
+            elif unit == "%":
+                val = f"{n:.1f}%"
+            else:
+                val = f"{int(n):,}" if n == int(n) else f"{n:.2f}"
+        except (ValueError, TypeError):
+            pass
+        cards.append(
+            f"<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;"
+            f"padding:.9rem 1rem'>"
+            f"<div style='font-size:.72rem;color:#64748b;text-transform:uppercase;"
+            f"letter-spacing:.04em'>{label}</div>"
+            f"<div style='font-size:1.2rem;font-weight:700;color:#1e40af;margin-top:.1rem'>{val}</div>"
+            f"</div>"
+        )
+    if not cards:
+        return "<p style='color:#6b7280'>No QUAST data available.</p>"
+    return (f"<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.75rem'>"
+            + "".join(cards) + "</div>")
+
+
+def _checkm2_section(cm: dict) -> str:
+    """Renders CheckM2 genome completeness results."""
+    if not cm:
+        return "<p style='color:#6b7280'>CheckM2 was not run.</p>"
+    if cm.get("error"):
+        return f"<p style='color:#6b7280'>CheckM2: {cm['error']}</p>"
+    comp = cm.get("completeness", "—")
+    cont = cm.get("contamination", "—")
+    model = cm.get("model_used", "—")
+    try:
+        comp_f = float(comp)
+        comp_color = "#22c55e" if comp_f >= 90 else ("#f59e0b" if comp_f >= 70 else "#ef4444")
+    except (ValueError, TypeError):
+        comp_color = "#6b7280"
+    try:
+        cont_f = float(cont)
+        cont_color = "#22c55e" if cont_f <= 5 else ("#f59e0b" if cont_f <= 10 else "#ef4444")
+    except (ValueError, TypeError):
+        cont_color = "#6b7280"
+    return (
+        f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem'>"
+        f"<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:1rem'>"
+        f"<div style='font-size:.72rem;color:#64748b;text-transform:uppercase'>Completeness</div>"
+        f"<div style='font-size:1.5rem;font-weight:700;color:{comp_color}'>{comp}%</div></div>"
+        f"<div style='background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:1rem'>"
+        f"<div style='font-size:.72rem;color:#64748b;text-transform:uppercase'>Contamination</div>"
+        f"<div style='font-size:1.5rem;font-weight:700;color:{cont_color}'>{cont}%</div></div>"
+        f"<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:1rem'>"
+        f"<div style='font-size:.72rem;color:#64748b;text-transform:uppercase'>Model</div>"
+        f"<div style='font-size:.9rem;font-weight:600;color:#1e40af;margin-top:.2rem'>{model}</div></div>"
+        f"</div>"
+    )
+
+
 def _bandage_section(bandage: dict) -> str:
     """Embeds the Bandage assembly graph image as base64 HTML, or returns a placeholder."""
     if not bandage:
@@ -258,7 +356,10 @@ def generate_html_report(job_id: str,
     abricate    = pipeline_results.get("abricate") or {}
     mobsuite    = pipeline_results.get("mobsuite") or {}
     bandage     = pipeline_results.get("bandage") or {}
+    quast       = pipeline_results.get("quast") or {}
+    checkm2     = pipeline_results.get("checkm2") or {}
     kraken2     = pipeline_results.get("kraken2") or {}
+    gctx        = pipeline_results.get("genomic_context") or {}
 
     risk        = ai_results.get("risk_level", "UNKNOWN").upper()
     risk_color, risk_bg = RISK_COLORS.get(risk, RISK_COLORS["UNKNOWN"])
@@ -362,6 +463,8 @@ def generate_html_report(job_id: str,
 
 <div class="container">
 
+  {_context_banner(gctx)}
+
   <!-- Kraken2 -->
   <div class="section">
     <div class="section-title">&#x1F9AB; Taxonomic Classification (Kraken2)</div>
@@ -394,6 +497,18 @@ def generate_html_report(job_id: str,
 
   <!-- Assembly Graph -->
   {_bandage_section(bandage)}
+
+  <!-- QUAST -->
+  <div class="section">
+    <div class="section-title">&#x1F4D0; Assembly Quality (QUAST)</div>
+    <div class="section-body">{_quast_section(quast)}</div>
+  </div>
+
+  <!-- CheckM2 -->
+  <div class="section">
+    <div class="section-title">&#x2705; Genome Completeness (CheckM2)</div>
+    <div class="section-body">{_checkm2_section(checkm2)}</div>
+  </div>
 
   <!-- MLST -->
   <div class="section">

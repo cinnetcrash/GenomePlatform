@@ -102,6 +102,25 @@
       </div>
       <div class="px-8 py-6 space-y-5">
 
+        <!-- Sample type selector -->
+        <div class="grid grid-cols-3 gap-2">
+          <button id="stype-auto" onclick="setSampleType('auto')"
+                  class="py-2.5 px-3 rounded-xl border-2 border-indigo-500 bg-indigo-50
+                         text-indigo-700 font-semibold text-xs transition-all">
+            🔍 Auto-detect
+          </button>
+          <button id="stype-bacterial" onclick="setSampleType('bacterial')"
+                  class="py-2.5 px-3 rounded-xl border-2 border-slate-200 bg-white
+                         text-slate-500 font-semibold text-xs transition-all hover:border-indigo-300">
+            🦠 Bacterial WGS
+          </button>
+          <button id="stype-metagenomics" onclick="setSampleType('metagenomics')"
+                  class="py-2.5 px-3 rounded-xl border-2 border-slate-200 bg-white
+                         text-slate-500 font-semibold text-xs transition-all hover:border-indigo-300">
+            🧬 Metagenomics / Unknown
+          </button>
+        </div>
+
         <!-- Multi-file drop zone -->
         <div id="drop-zone"
              class="drop-zone rounded-xl bg-slate-50 p-10 text-center cursor-pointer"
@@ -349,9 +368,25 @@
 
 <script>
 // ─── State ────────────────────────────────────────────────────────────────
-let sampleQueue   = [];   // [{name, r1, r2, type, sizeMb}]
-let activeJobs    = {};   // jobId → {name, startTime, pollTimer}
-let k2DbValue     = "";
+let sampleQueue     = [];   // [{name, r1, r2, type, sizeMb}]
+let activeJobs      = {};   // jobId → {name, startTime, pollTimer}
+let k2DbValue       = "";
+let sampleTypeValue = "auto";
+
+// ─── Sample Type Selector ────────────────────────────────────────────────
+function setSampleType(t) {
+  sampleTypeValue = t;
+  ['auto','bacterial','metagenomics'].forEach(id => {
+    const btn = document.getElementById('stype-'+id);
+    const active = id === t;
+    btn.className = btn.className
+      .replace(/border-indigo-500 bg-indigo-50 text-indigo-700|border-slate-200 bg-white text-slate-500/g, '')
+      .trim();
+    btn.className += active
+      ? ' border-indigo-500 bg-indigo-50 text-indigo-700'
+      : ' border-slate-200 bg-white text-slate-500';
+  });
+}
 // legacy single-job refs (kept for resetAll / showResults)
 let currentJobId  = null;
 let pollTimer     = null;
@@ -443,12 +478,15 @@ const STAGE_LABELS = {
   detect:     "📡 Read Type Detection",
   kraken2:    "🦠 Taxonomic Classification (Kraken2)",
   qc:         "📊 Quality Control (QC)",
-  assembly:   "🔧 Genome Assembly (Flye + Autocycler)",
+  assembly:   "🔧 Genome Assembly",
   bandage:    "🗺 Assembly Graph (Bandage)",
+  quast:      "📐 Assembly QC (QUAST)",
+  checkm2:    "✅ Genome Completeness (CheckM2)",
+  checkv:     "🦠 Viral Quality (CheckV)",
   mlst:       "🔬 MLST Typing",
   amr:        "💊 AMR Gene Detection",
-  abricate:   "🧫 Virulence & Resistance Screen (Abricate)",
-  mobsuite:   "🔵 Mobile Genetic Elements (MOB-Suite)",
+  abricate:   "🧫 Virulence & Resistance (Abricate)",
+  mobsuite:   "🔵 Mobile Elements (MOB-Suite)",
   annotation: "📝 Annotation (Bakta)",
   ai:         "🤖 AI Clinical Interpretation",
   report:     "📄 Report Generation",
@@ -549,6 +587,7 @@ async function uploadSample(sample, index, total) {
   formData.append('file', sample.r1);
   if (sample.r2) formData.append('file_r2', sample.r2);
   formData.append('kraken2_db', k2DbValue);
+  formData.append('sample_type', sampleTypeValue);
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();

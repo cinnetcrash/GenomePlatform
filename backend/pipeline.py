@@ -17,7 +17,9 @@ from typing import Any
 import database as db
 from config import (
     ASSEMBLY_QC, ASSEMBLY_THREADS, AUTOCYCLER_BIN, BANDAGE_BIN,
-    CONDA_BASE, MAX_THREADS, RESULTS_DIR, SCRIPTS_DIR,
+    CHECKM2_DB, CHECKV_DB, CONDA_BASE,
+    HUMAN_DOMINANT_THRESHOLD, MAX_THREADS, RESULTS_DIR, SCRIPTS_DIR,
+    VIRAL_DOMINANT_THRESHOLD,
 )
 from security import safe_sample_name, sanitize_path
 
@@ -229,6 +231,109 @@ def _parse_kraken2_report(report_path: Path) -> dict[str, Any]:
         "classified_percent":   round(100 - unclassified_pct, 1),
         "unclassified_percent": round(unclassified_pct, 1),
         "top_taxa":             taxa[:15],
+    }
+
+
+def decide_genomic_context(kraken2: dict | None,
+                           sample_type: str) -> dict[str, Any]:
+    """
+    Decides the genomic context from Kraken2 results + user-supplied sample_type.
+
+    Returns:
+        {
+          "context": "bacterial" | "viral_dominant" | "human_contaminated" | "metagenomics",
+          "skip_bacterial": bool,   # skip MLST / AMR / Abricate / MOB-Suite
+          "run_checkv":    bool,
+          "reason":        str,     # human-readable explanation
+          "viral_pct":     float,
+          "human_pct":     float,
+        }
+    """
+    # Default: no Kraken2 data or user explicitly chose bacterial
+    if not kraken2 or not kraken2.get("top_taxa"):
+        if sample_type == "metagenomics":
+            return {"context": "metagenomics", "skip_bacterial": True,
+                    "run_checkv": False,
+                    "reason": "Sample type set to Metagenomics/Unknown by user.",
+                    "viral_pct": 0.0, "human_pct": 0.0}
+        return {"context": "bacterial", "skip_bacterial": False,
+                "run_checkv": False,
+                "reason": "No Kraken2 data — assuming bacterial WGS.",
+                "viral_pct": 0.0, "human_pct": 0.0}
+
+    # Sum viral and human percentages from top taxa
+    viral_pct = 0.0
+    human_pct = 0.0
+    top_taxa   = kraken2.get("top_taxa", [])
+
+    # Also check unclassified
+    classified_pct = kraken2.get("classified_percent", 100.0)
+
+    for t in top_taxa:
+        name = t["name"].lower()
+        pct  = t["percent"]
+        if "homo sapiens" in name or "human" in name:
+            human_pct += pct
+        # Broad viral detection: Kraken2 assigns viral reads to virus/phage names
+        if any(w in name for w in ["virus", "phage", "viridae", "virales",
+                                    "viricota", "viricetes", "bacteriophage",
+                                    "rhinovirus", "coronavirus", "influenza",
+                                    "adenovirus", "norovirus", "rotavirus"]):
+            viral_pct += pct
+
+    # Determine context
+    if human_pct >= HUMAN_DOMINANT_THRESHOLD:
+        return {
+            "context":        "human_contaminated",
+            "skip_bacterial": True,
+            "run_checkv":     False,
+            "reason":         (f"Kraken2 detected {human_pct:.1f}% human reads. "
+                               "MLST/AMR/Abricate/MOB-Suite skipped (not applicable to human DNA). "
+                               "Assembly and quality checks will still run."),
+            "viral_pct": viral_pct, "human_pct": human_pct,
+        }
+
+    if viral_pct >= VIRAL_DOMINANT_THRESHOLD or sample_type == "metagenomics":
+        reason_parts = []
+        if viral_pct >= VIRAL_DOMINANT_THRESHOLD:
+            top_virus = next((t["name"] for t in top_taxa
+                              if any(w in t["name"].lower()
+                                     for w in ["virus","phage","viridae"])), "")
+            reason_parts.append(
+                f"Kraken2 detected {viral_pct:.1f}% viral reads"
+                + (f" (dominant: {top_virus})" if top_virus else "") + "."
+            )
+        if sample_type == "metagenomics":
+            reason_parts.append("Sample type set to Metagenomics/Unknown by user.")
+        reason_parts.append(
+            "MLST/AMR/Abricate/MOB-Suite skipped (bacterial-specific tools). "
+            "Assembly, QUAST, CheckM2, Bandage still running."
+        )
+        return {
+            "context":        "viral_dominant",
+            "skip_bacterial": True,
+            "run_checkv":     viral_pct >= VIRAL_DOMINANT_THRESHOLD,
+            "reason":         " ".join(reason_parts),
+            "viral_pct": viral_pct, "human_pct": human_pct,
+        }
+
+    if viral_pct > 10 or human_pct > 10:
+        return {
+            "context":        "metagenomics",
+            "skip_bacterial": False,   # still run but with caveat
+            "run_checkv":     False,
+            "reason":         (f"Mixed sample: {viral_pct:.1f}% viral, {human_pct:.1f}% human. "
+                               "Running all steps but results may be less reliable."),
+            "viral_pct": viral_pct, "human_pct": human_pct,
+        }
+
+    return {
+        "context":        "bacterial",
+        "skip_bacterial": False,
+        "run_checkv":     False,
+        "reason":         (f"Kraken2 shows predominantly bacterial reads "
+                           f"({viral_pct:.1f}% viral, {human_pct:.1f}% human)."),
+        "viral_pct": viral_pct, "human_pct": human_pct,
     }
 
 
@@ -715,6 +820,154 @@ def stage_abricate(job_id: str, fasta: Path, out_dir: Path,
     return result
 
 
+# ─── QUAST ────────────────────────────────────────────────────────────────────
+
+def stage_quast(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
+    """Runs QUAST on the assembly and parses the key metrics."""
+    db.update_stage(job_id, "quast", "running", f"Running QUAST on {fasta.name}")
+    q_dir = out_dir / "quast"
+    q_dir.mkdir(exist_ok=True)
+
+    cmd = [
+        "quast.py", sanitize_path(fasta),
+        "-o", str(q_dir),
+        "--threads", str(MAX_THREADS),
+        "--no-html", "--no-plots",
+    ]
+    rc, out_s, err_s = _run(cmd, q_dir, timeout=1800, env_name="quast5")
+
+    result: dict[str, Any] = {}
+    report_tsv = q_dir / "report.tsv"
+    if report_tsv.exists():
+        for line in report_tsv.read_text().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                key = parts[0].strip()
+                val = parts[1].strip()
+                result[key] = val
+
+    summary = {
+        "contigs":        result.get("# contigs (>= 0 bp)", result.get("# contigs", "—")),
+        "total_length":   result.get("Total length (>= 0 bp)", result.get("Total length", "—")),
+        "largest_contig": result.get("Largest contig", "—"),
+        "n50":            result.get("N50", "—"),
+        "n90":            result.get("N90", "—"),
+        "l50":            result.get("L50", "—"),
+        "gc_pct":         result.get("GC (%)", "—"),
+        "ns_per_100k":    result.get("# N's per 100 kbp", "—"),
+    }
+    db.update_stage(job_id, "quast", "done", json.dumps(summary))
+    logger.info("[%s] QUAST: N50=%s, contigs=%s", job_id,
+                summary["n50"], summary["contigs"])
+    return summary
+
+
+# ─── CheckM2 ──────────────────────────────────────────────────────────────────
+
+def stage_checkm2(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
+    """Assesses genome completeness and contamination using CheckM2."""
+    db.update_stage(job_id, "checkm2", "running", f"Running CheckM2 on {fasta.name}")
+
+    if not CHECKM2_DB.exists():
+        msg = f"CheckM2 database not found at {CHECKM2_DB}"
+        db.update_stage(job_id, "checkm2", "skipped", msg)
+        logger.warning("[%s] %s", job_id, msg)
+        return {"error": msg}
+
+    cm_dir   = out_dir / "checkm2"
+    fasta_dir = out_dir / "checkm2_input"
+    cm_dir.mkdir(exist_ok=True)
+    fasta_dir.mkdir(exist_ok=True)
+
+    # CheckM2 expects a directory of FASTA files
+    import shutil
+    shutil.copy2(fasta, fasta_dir / fasta.name)
+
+    cmd = [
+        "checkm2", "predict",
+        "--input",            str(fasta_dir),
+        "--output-directory", str(cm_dir),
+        "--threads",          str(MAX_THREADS),
+        "--database_path",    str(CHECKM2_DB),
+        "--force",
+        "-x", fasta.suffix.lstrip("."),
+    ]
+    rc, out_s, err_s = _run(cmd, cm_dir, timeout=3600, env_name="checkM")
+
+    result: dict[str, Any] = {}
+    report = cm_dir / "quality_report.tsv"
+    if report.exists():
+        lines = report.read_text().splitlines()
+        if len(lines) >= 2:
+            headers = lines[0].split("\t")
+            vals    = lines[1].split("\t")
+            row = dict(zip(headers, vals))
+            result = {
+                "completeness":   row.get("Completeness", "—"),
+                "contamination":  row.get("Contamination", "—"),
+                "model_used":     row.get("Completeness_Model_Used", "—"),
+            }
+    else:
+        result = {"error": err_s[:300] if rc != 0 else "No output produced."}
+
+    db.update_stage(job_id, "checkm2", "done", json.dumps(result))
+    logger.info("[%s] CheckM2: completeness=%s contamination=%s",
+                job_id, result.get("completeness"), result.get("contamination"))
+    return result
+
+
+# ─── CheckV ───────────────────────────────────────────────────────────────────
+
+def stage_checkv(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
+    """Assesses viral genome completeness using CheckV (run when viral dominant)."""
+    db.update_stage(job_id, "checkv", "running", f"Running CheckV on {fasta.name}")
+
+    cv_dir = out_dir / "checkv"
+    cv_dir.mkdir(exist_ok=True)
+
+    # CheckV will use its internal database if --db not specified
+    cmd = ["checkv", "end_to_end",
+           sanitize_path(fasta), str(cv_dir),
+           "-t", str(MAX_THREADS)]
+    if CHECKV_DB.is_dir():
+        cmd += ["--db", str(CHECKV_DB)]
+
+    rc, out_s, err_s = _run(cmd, cv_dir, timeout=3600, env_name="checkv")
+
+    result: dict[str, Any] = {}
+    summary_tsv = cv_dir / "quality_summary.tsv"
+    if summary_tsv.exists():
+        lines = summary_tsv.read_text().splitlines()
+        if len(lines) >= 2:
+            headers = lines[0].split("\t")
+            viral_count = len(lines) - 1
+            complete = sum(1 for l in lines[1:]
+                           if "Complete" in l or "High-quality" in l)
+            result = {
+                "viral_contigs":      viral_count,
+                "complete_or_hq":     complete,
+            }
+            # Top hits
+            tops = []
+            for l in lines[1:6]:
+                parts = l.split("\t")
+                if len(parts) >= len(headers):
+                    row = dict(zip(headers, parts))
+                    tops.append({
+                        "contig":     row.get("contig_id", ""),
+                        "checkv_quality": row.get("checkv_quality", ""),
+                        "genome_copies":  row.get("genome_copies", ""),
+                    })
+            result["top_contigs"] = tops
+    else:
+        result = {"error": err_s[:300] if rc != 0 else "No CheckV output."}
+
+    db.update_stage(job_id, "checkv", "done", json.dumps(result))
+    logger.info("[%s] CheckV: %s viral contigs", job_id,
+                result.get("viral_contigs", "?"))
+    return result
+
+
 # ─── MOB-Suite (Plasmid typing) ───────────────────────────────────────────────
 
 def stage_mobsuite(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
@@ -837,7 +1090,8 @@ def stage_annotation(job_id: str, fasta: Path, out_dir: Path,
 
 def run_pipeline(job_id: str, fastq_path: Path,
                  fastq_r2: Path | None = None,
-                 kraken2_db: Path | None = None) -> dict[str, Any]:
+                 kraken2_db: Path | None = None,
+                 sample_type: str = "auto") -> dict[str, Any]:
     """
     Runs the full pipeline. Returns a dict with all results.
     On failure, sets status to 'failed' in the DB and returns {'error': ...}.
@@ -883,6 +1137,12 @@ def run_pipeline(job_id: str, fastq_path: Path,
                             "No Kraken2 database specified.")
             results["kraken2"] = None
 
+        # ── Genomic context decision ───────────────────────────────────
+        gctx = decide_genomic_context(results["kraken2"], sample_type)
+        results["genomic_context"] = gctx
+        logger.info("[%s] Genomic context: %s (skip_bacterial=%s)",
+                    job_id, gctx["context"], gctx["skip_bacterial"])
+
         # ── 3. QC ─────────────────────────────────────────────────────────
         results["qc"], filtered_r1, filtered_r2 = stage_qc(
             job_id, fastq_path, out_dir, read_type, fastq_r2=fastq_r2
@@ -899,41 +1159,89 @@ def run_pipeline(job_id: str, fastq_path: Path,
             raise RuntimeError("Assembly failed — no output FASTA produced.")
         logger.info("[%s] Assembly: %s", job_id, fasta)
 
-        # 5. Bandage graph visualization
+        skip_reason = gctx["reason"]
+        skip_bact   = gctx["skip_bacterial"]
+
+        # 5. Bandage (always)
         try:
             results["bandage"] = stage_bandage(job_id, fasta, out_dir)
         except Exception as band_err:
             logger.warning("[%s] Bandage skipped: %s", job_id, band_err)
             results["bandage"] = {"error": str(band_err)}
 
-        # 6. MLST
-        results["mlst"] = stage_mlst(job_id, fasta, out_dir)
-        logger.info("[%s] MLST: ST%s", job_id, results["mlst"].get("st"))
-
-        # 7. AMR
-        results["amr"] = stage_amr(job_id, fasta, out_dir)
-        logger.info("[%s] AMR: %d genes found.", job_id, results["amr"].get("count", 0))
-
-        # 8. Abricate (CARD always; VFDB if Kraken2 top genus is in VFDB)
+        # 6. QUAST (always)
         try:
-            results["abricate"] = stage_abricate(
-                job_id, fasta, out_dir, results.get("kraken2")
-            )
-            logger.info("[%s] Abricate: %d hits.", job_id, results["abricate"].get("count", 0))
-        except Exception as abr_err:
-            logger.warning("[%s] Abricate skipped: %s", job_id, abr_err)
-            results["abricate"] = {"genes": [], "count": 0, "ran_vfdb": False, "top_genus": ""}
+            results["quast"] = stage_quast(job_id, fasta, out_dir)
+        except Exception as q_err:
+            logger.warning("[%s] QUAST skipped: %s", job_id, q_err)
+            results["quast"] = {}
 
-        # 9. MOB-Suite (plasmid detection — optional)
+        # 7. CheckM2 (always — assesses completeness/contamination)
         try:
-            results["mobsuite"] = stage_mobsuite(job_id, fasta, out_dir)
-            logger.info("[%s] MOB-Suite: %d plasmid(s).", job_id,
-                        results["mobsuite"].get("plasmid_count", 0))
-        except Exception as mob_err:
-            logger.warning("[%s] MOB-Suite skipped: %s", job_id, mob_err)
-            results["mobsuite"] = {"plasmids": [], "plasmid_count": 0, "error": str(mob_err)}
+            results["checkm2"] = stage_checkm2(job_id, fasta, out_dir)
+        except Exception as cm_err:
+            logger.warning("[%s] CheckM2 skipped: %s", job_id, cm_err)
+            results["checkm2"] = {"error": str(cm_err)}
 
-        # 10. Annotation (optional — continue even if it fails)
+        # 8. CheckV (only when viral dominant)
+        if gctx["run_checkv"]:
+            try:
+                results["checkv"] = stage_checkv(job_id, fasta, out_dir)
+            except Exception as cv_err:
+                logger.warning("[%s] CheckV skipped: %s", job_id, cv_err)
+                results["checkv"] = {"error": str(cv_err)}
+        else:
+            db.update_stage(job_id, "checkv", "skipped",
+                            "Not run: viral reads not dominant in this sample.")
+            results["checkv"] = None
+
+        # 9. MLST (skip if viral/human dominant)
+        if skip_bact:
+            db.update_stage(job_id, "mlst", "skipped", skip_reason)
+            results["mlst"] = {"skipped": True, "reason": skip_reason}
+        else:
+            results["mlst"] = stage_mlst(job_id, fasta, out_dir)
+            logger.info("[%s] MLST: ST%s", job_id, results["mlst"].get("st"))
+
+        # 10. AMR (skip if viral/human dominant)
+        if skip_bact:
+            db.update_stage(job_id, "amr", "skipped", skip_reason)
+            results["amr"] = {"genes": [], "count": 0, "skipped": True, "reason": skip_reason}
+        else:
+            results["amr"] = stage_amr(job_id, fasta, out_dir)
+            logger.info("[%s] AMR: %d genes found.", job_id, results["amr"].get("count", 0))
+
+        # 11. Abricate (skip if viral/human dominant)
+        if skip_bact:
+            db.update_stage(job_id, "abricate", "skipped", skip_reason)
+            results["abricate"] = {"genes": [], "count": 0, "skipped": True, "reason": skip_reason}
+        else:
+            try:
+                results["abricate"] = stage_abricate(
+                    job_id, fasta, out_dir, results.get("kraken2")
+                )
+                logger.info("[%s] Abricate: %d hits.", job_id,
+                            results["abricate"].get("count", 0))
+            except Exception as abr_err:
+                logger.warning("[%s] Abricate error: %s", job_id, abr_err)
+                results["abricate"] = {"genes": [], "count": 0, "ran_vfdb": False, "top_genus": ""}
+
+        # 12. MOB-Suite (skip if viral/human dominant)
+        if skip_bact:
+            db.update_stage(job_id, "mobsuite", "skipped", skip_reason)
+            results["mobsuite"] = {"plasmids": [], "plasmid_count": 0,
+                                   "skipped": True, "reason": skip_reason}
+        else:
+            try:
+                results["mobsuite"] = stage_mobsuite(job_id, fasta, out_dir)
+                logger.info("[%s] MOB-Suite: %d plasmid(s).", job_id,
+                            results["mobsuite"].get("plasmid_count", 0))
+            except Exception as mob_err:
+                logger.warning("[%s] MOB-Suite error: %s", job_id, mob_err)
+                results["mobsuite"] = {"plasmids": [], "plasmid_count": 0,
+                                       "error": str(mob_err)}
+
+        # 13. Annotation (optional — continue even if it fails)
         try:
             results["annotation"] = str(
                 stage_annotation(job_id, fasta, out_dir, sample_name)
