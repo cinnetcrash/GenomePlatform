@@ -1,4 +1,4 @@
-# 🧬 GenomePlatform
+# 🧬 LycianWay
 
 **Automated bacterial genomic analysis · AI clinical interpretation · PCR primer design**
 

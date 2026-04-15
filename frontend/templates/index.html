@@ -12,50 +12,38 @@
     .drop-zone { border: 2px dashed #6366f1; transition: all 0.2s; }
     .drop-zone.drag-over { border-color: #4f46e5; background: #eef2ff; }
 
-    .stage-dot {
-      width: 12px; height: 12px; border-radius: 50%;
-      display: inline-block; margin-right: 8px; flex-shrink: 0;
-    }
-    .dot-pending  { background: #d1d5db; }
-    .dot-running  { background: #f59e0b; animation: blink 1s infinite; }
-    .dot-done     { background: #22c55e; }
-    .dot-failed   { background: #ef4444; }
-    .dot-skipped  { background: #94a3b8; }
+    .stage-dot { width:12px;height:12px;border-radius:50%;display:inline-block;margin-right:8px;flex-shrink:0; }
+    .dot-pending  { background:#d1d5db; }
+    .dot-running  { background:#f59e0b; animation:blink 1s infinite; }
+    .dot-done     { background:#22c55e; }
+    .dot-failed   { background:#ef4444; }
+    .dot-skipped  { background:#94a3b8; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
 
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: .35; }
-    }
+    .progress-bar  { height:6px;border-radius:9999px;background:#e2e8f0;overflow:hidden; }
+    .progress-fill { height:100%;border-radius:9999px;background:linear-gradient(90deg,#6366f1,#8b5cf6);transition:width .5s ease; }
+    .gauge-bar  { height:8px;border-radius:9999px;background:#e2e8f0;overflow:hidden; }
+    .gauge-fill { height:100%;border-radius:9999px;transition:width 1s ease; }
 
-    .progress-bar  { height: 6px; border-radius: 9999px; background: #e2e8f0; overflow: hidden; }
-    .progress-fill {
-      height: 100%; border-radius: 9999px;
-      background: linear-gradient(90deg, #6366f1, #8b5cf6);
-      transition: width 0.5s ease;
-    }
-    .gauge-bar  { height: 8px; border-radius: 9999px; background: #e2e8f0; overflow: hidden; }
-    .gauge-fill { height: 100%; border-radius: 9999px; transition: width 1s ease; }
+    .metric-card  { background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;padding:1rem 1.2rem; }
+    .metric-label { font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em; }
+    .metric-value { font-size:1.35rem;font-weight:700;color:#1e40af;margin-top:.15rem; }
+    .metric-sub   { font-size:.75rem;color:#94a3b8;margin-top:.1rem; }
+    .section-header { font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:.75rem; }
 
-    .metric-card {
-      background: #f8fafc; border-radius: 10px;
-      border: 1px solid #e2e8f0; padding: 1rem 1.2rem;
-    }
-    .metric-label { font-size: .72rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
-    .metric-value { font-size: 1.35rem; font-weight: 700; color: #1e40af; margin-top: .15rem; }
-    .metric-sub   { font-size: .75rem; color: #94a3b8; margin-top: .1rem; }
+    .amr-pill { display:inline-block;padding:.2rem .65rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;margin:.2rem; }
+    .amr-pill.none { background:#f0fdf4;color:#166534;border-color:#bbf7d0; }
 
-    .section-header {
-      font-size: .7rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: .08em; color: #64748b; margin-bottom: .75rem;
-    }
+    .qc-badge { display:inline-flex;align-items:center;gap:.4rem;padding:.35rem .8rem;border-radius:8px;font-size:.78rem;font-weight:600; }
+    .qc-pass { background:#f0fdf4;color:#166534;border:1px solid #bbf7d0; }
+    .qc-warn { background:#fffbeb;color:#92400e;border:1px solid #fde68a; }
+    .qc-fail { background:#fef2f2;color:#991b1b;border:1px solid #fecaca; }
 
-    .amr-pill {
-      display: inline-block; padding: .2rem .65rem;
-      border-radius: 9999px; font-size: .75rem; font-weight: 600;
-      background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;
-      margin: .2rem;
-    }
-    .amr-pill.none { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+    .kraken-bar-row { display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem; }
+    .kraken-name { width:190px;font-size:.8rem;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-style:italic; }
+    .kraken-track { flex:1;background:#e2e8f0;border-radius:9999px;height:13px;overflow:hidden; }
+    .kraken-fill  { height:100%;border-radius:9999px;background:#6366f1; }
+    .kraken-pct   { width:44px;text-align:right;font-size:.8rem;font-weight:600;color:#1e40af;font-family:monospace; }
   </style>
 </head>
 <body class="bg-slate-50 min-h-screen">
@@ -78,7 +66,7 @@
 
   <main class="max-w-5xl mx-auto px-4 py-10 space-y-6">
 
-    <!-- System Stats Widget -->
+    <!-- System Stats -->
     <div class="bg-white rounded-2xl shadow-sm border border-slate-100 px-8 py-5">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-sm font-semibold text-slate-600 uppercase tracking-wide">Server Resources</h3>
@@ -110,20 +98,22 @@
         <h2 class="text-lg font-semibold text-slate-800">Upload FASTQ File</h2>
         <p class="text-sm text-slate-500 mt-1">MinION or Illumina FASTQ / FASTQ.gz — maximum 2 GB</p>
       </div>
-      <div class="px-8 py-6">
+      <div class="px-8 py-6 space-y-5">
+
+        <!-- Drop zone -->
         <div id="drop-zone"
              class="drop-zone rounded-xl bg-slate-50 p-10 text-center cursor-pointer"
              onclick="document.getElementById('file-input').click()"
-             ondragover="handleDragOver(event)"
-             ondragleave="handleDragLeave(event)"
-             ondrop="handleDrop(event)">
+             ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
           <div class="text-5xl mb-3">📂</div>
           <p class="text-slate-600 font-medium">Drag and drop your file here, or click to browse</p>
           <p class="text-slate-400 text-sm mt-1">.fastq · .fastq.gz · .fq · .fq.gz</p>
           <input id="file-input" type="file" accept=".fastq,.fastq.gz,.fq,.fq.gz" class="hidden"
                  onchange="handleFileSelect(this.files[0])">
         </div>
-        <div id="file-info" class="hidden mt-4 p-4 bg-indigo-50 rounded-lg border border-indigo-100">
+
+        <!-- File info -->
+        <div id="file-info" class="hidden p-4 bg-indigo-50 rounded-lg border border-indigo-100">
           <div class="flex items-center justify-between">
             <div>
               <span class="font-medium text-indigo-700" id="file-name"></span>
@@ -132,25 +122,49 @@
             <button onclick="clearFile()" class="text-slate-400 hover:text-red-500 text-sm">✕</button>
           </div>
         </div>
+
+        <!-- Kraken2 DB Selector -->
+        <div class="border border-slate-200 rounded-xl p-4 bg-slate-50">
+          <div class="flex items-center justify-between mb-2">
+            <label class="text-sm font-semibold text-slate-700">🦠 Kraken2 Database</label>
+            <span class="text-xs text-slate-400" id="k2-status"></span>
+          </div>
+          <div class="flex gap-2">
+            <select id="k2-db-select"
+                    onchange="onDbSelect()"
+                    class="flex-1 text-sm border border-slate-300 rounded-lg px-3 py-2 bg-white
+                           text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300">
+              <option value="">Loading databases...</option>
+            </select>
+          </div>
+          <input id="k2-db-path" type="text" placeholder="Or type a custom database path..."
+                 class="mt-2 w-full text-sm border border-slate-300 rounded-lg px-3 py-2
+                        text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                 oninput="onDbPathInput()">
+          <p class="text-xs text-slate-400 mt-1">
+            Leave empty to skip taxonomic classification.
+          </p>
+        </div>
+
+        <!-- Upload button -->
         <button id="upload-btn" onclick="startUpload()"
-                class="hidden mt-4 w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700
+                class="hidden w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700
                        text-white font-semibold rounded-xl transition-colors duration-200
                        disabled:opacity-50 disabled:cursor-not-allowed">
           🚀 Start Analysis
         </button>
-        <div id="upload-progress" class="hidden mt-4">
+
+        <!-- Upload progress -->
+        <div id="upload-progress" class="hidden">
           <div class="flex justify-between text-sm text-slate-500 mb-1">
-            <span>Uploading...</span>
-            <span id="upload-pct">0%</span>
+            <span>Uploading...</span><span id="upload-pct">0%</span>
           </div>
-          <div class="progress-bar">
-            <div class="progress-fill" id="upload-fill" style="width:0%"></div>
-          </div>
+          <div class="progress-bar"><div class="progress-fill" id="upload-fill" style="width:0%"></div></div>
         </div>
       </div>
     </div>
 
-    <!-- Analysis Progress Card -->
+    <!-- Progress Card -->
     <div id="progress-card" class="hidden bg-white rounded-2xl shadow-sm border border-slate-100">
       <div class="px-8 py-5 border-b border-slate-100 flex items-center justify-between">
         <div>
@@ -159,23 +173,18 @@
             Job ID: <code id="display-job-id" class="bg-slate-100 px-1.5 py-0.5 rounded text-xs"></code>
           </p>
         </div>
-        <div id="overall-status" class="px-3 py-1 rounded-full text-sm font-semibold bg-amber-100 text-amber-700">
-          Running
-        </div>
+        <div id="overall-status" class="px-3 py-1 rounded-full text-sm font-semibold bg-amber-100 text-amber-700">Running</div>
       </div>
       <div class="px-8 py-6">
         <div id="stages-list" class="space-y-3 mb-6"></div>
-        <div class="progress-bar">
-          <div class="progress-fill" id="overall-fill" style="width:5%"></div>
-        </div>
+        <div class="progress-bar"><div class="progress-fill" id="overall-fill" style="width:5%"></div></div>
         <p class="text-xs text-slate-400 mt-2 text-right" id="eta-text">Estimating time remaining...</p>
       </div>
     </div>
 
-    <!-- Results Summary Card (shown after completion) -->
+    <!-- Results Card -->
     <div id="results-card" class="hidden bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
 
-      <!-- Header bar -->
       <div class="px-8 py-5 border-b border-slate-100 flex items-center justify-between">
         <div>
           <h2 class="text-lg font-semibold text-slate-800">Analysis Results</h2>
@@ -183,38 +192,45 @@
         </div>
         <div class="flex gap-3">
           <button onclick="resetAll()"
-                  class="py-2 px-4 border border-slate-200 hover:border-slate-300
-                         text-slate-600 font-semibold rounded-xl transition-colors text-sm">
+                  class="py-2 px-4 border border-slate-200 hover:border-slate-300 text-slate-600 font-semibold rounded-xl transition-colors text-sm">
             ↩ New Analysis
           </button>
           <a id="view-link" href="#" target="_blank"
-             class="py-2 px-4 bg-indigo-100 hover:bg-indigo-200
-                    text-indigo-700 font-semibold rounded-xl transition-colors text-sm">
+             class="py-2 px-4 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-semibold rounded-xl transition-colors text-sm">
             🔍 View Report
           </a>
           <a id="report-link" href="#"
-             class="py-2 px-5 bg-emerald-600 hover:bg-emerald-700
-                    text-white font-semibold rounded-xl transition-colors text-sm">
+             class="py-2 px-5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl transition-colors text-sm">
             ⬇ Download
           </a>
         </div>
       </div>
 
-      <!-- QC Section -->
+      <!-- Kraken2 -->
+      <div id="k2-section" class="hidden px-8 pt-6 pb-2">
+        <div class="section-header">🦠 Taxonomic Classification (Kraken2)</div>
+        <div class="text-xs text-slate-500 mb-3">
+          <span id="k2-classified"></span>
+        </div>
+        <div id="k2-bars"></div>
+      </div>
+
+      <!-- QC -->
       <div class="px-8 pt-6 pb-2">
         <div class="section-header">📊 Read Quality</div>
         <div id="qc-grid" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
       </div>
 
-      <!-- Assembly Section -->
+      <!-- Assembly Stats + QC -->
       <div class="px-8 pt-5 pb-2">
         <div class="section-header">🔧 Assembly Statistics</div>
-        <div id="asm-grid" class="grid grid-cols-2 sm:grid-cols-5 gap-3"></div>
+        <div id="asm-grid" class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4"></div>
+        <div class="section-header">Assembly QC Checks</div>
+        <div id="asm-qc-checks" class="flex flex-wrap gap-2"></div>
       </div>
 
-      <!-- MLST + AMR side by side -->
+      <!-- MLST + AMR -->
       <div class="px-8 pt-5 pb-6 grid grid-cols-1 sm:grid-cols-2 gap-6">
-        <!-- MLST -->
         <div>
           <div class="section-header">🔬 MLST Typing</div>
           <div class="metric-card">
@@ -231,7 +247,6 @@
             <div class="mt-2 text-xs text-slate-500" id="mlst-alleles"></div>
           </div>
         </div>
-        <!-- AMR -->
         <div>
           <div class="section-header">💊 Antimicrobial Resistance</div>
           <div class="metric-card">
@@ -240,7 +255,6 @@
           </div>
         </div>
       </div>
-
     </div>
 
     <!-- Error Card -->
@@ -250,19 +264,17 @@
         <div class="flex-1">
           <h2 class="text-lg font-semibold text-red-700">Analysis Could Not Be Completed</h2>
           <p class="text-slate-600 text-sm mt-1 font-medium">Error details:</p>
-          <pre id="error-msg"
-               class="mt-2 text-xs text-slate-500 bg-slate-50 border border-slate-200
-                      rounded-lg p-3 whitespace-pre-wrap break-words max-h-48 overflow-y-auto font-mono"></pre>
+          <pre id="error-msg" class="mt-2 text-xs text-slate-500 bg-slate-50 border border-slate-200
+                                     rounded-lg p-3 whitespace-pre-wrap break-words max-h-48 overflow-y-auto font-mono"></pre>
           <button onclick="resetAll()"
-                  class="mt-4 py-2.5 px-5 bg-indigo-600 hover:bg-indigo-700
-                         text-white font-semibold rounded-xl transition-colors text-sm">
+                  class="mt-4 py-2.5 px-5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors text-sm">
             ↩ New Analysis
           </button>
         </div>
       </div>
     </div>
 
-    <!-- Info Cards -->
+    <!-- Info -->
     <div class="grid grid-cols-3 gap-4 text-sm">
       <div class="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
         <div class="text-2xl mb-2">🔍</div>
@@ -295,11 +307,13 @@ let selectedFile = null;
 let currentJobId = null;
 let pollTimer    = null;
 let startTime    = null;
+let k2DbValue    = "";   // final DB path sent with upload
 
 const STAGE_LABELS = {
   detect:     "📡 Read Type Detection",
+  kraken2:    "🦠 Taxonomic Classification (Kraken2)",
   qc:         "📊 Quality Control (QC)",
-  assembly:   "🔧 Genome Assembly",
+  assembly:   "🔧 Genome Assembly (Flye + Autocycler)",
   mlst:       "🔬 MLST Typing",
   amr:        "💊 AMR Gene Detection",
   annotation: "📝 Annotation (Bakta)",
@@ -312,15 +326,12 @@ const STAGE_ORDER = Object.keys(STAGE_LABELS);
 // ─── Helpers ──────────────────────────────────────────────────────────────
 function fmt(n) {
   if (n === undefined || n === null || n === "") return "—";
-  if (typeof n === "number") {
-    if (n >= 1e9)  return (n / 1e9).toFixed(2) + " Gb";
-    if (n >= 1e6)  return (n / 1e6).toFixed(2) + " Mb";
-    if (n >= 1e3)  return (n / 1e3).toFixed(1) + " kb";
-    return n.toString();
-  }
-  return String(n);
+  n = Number(n);
+  if (n >= 1e9)  return (n/1e9).toFixed(2)+" Gb";
+  if (n >= 1e6)  return (n/1e6).toFixed(2)+" Mb";
+  if (n >= 1e3)  return (n/1e3).toFixed(1)+" kb";
+  return n.toString();
 }
-
 function metricCard(label, value, sub) {
   return `<div class="metric-card">
     <div class="metric-label">${label}</div>
@@ -328,10 +339,45 @@ function metricCard(label, value, sub) {
     ${sub ? `<div class="metric-sub">${sub}</div>` : ""}
   </div>`;
 }
+function tryJSON(s) { try { return JSON.parse(s); } catch { return null; } }
 
-function tryJSON(s) {
-  try { return JSON.parse(s); } catch { return null; }
+// ─── Kraken2 DB Loader ────────────────────────────────────────────────────
+async function loadKrakenDbs() {
+  try {
+    const res = await fetch('/kraken2-databases');
+    const data = await res.json();
+    const sel = document.getElementById('k2-db-select');
+    sel.innerHTML = '<option value="">— Skip Kraken2 classification —</option>';
+    data.databases.forEach(db => {
+      const opt = document.createElement('option');
+      opt.value = db.path;
+      opt.textContent = `${db.label}  (${db.path})`;
+      sel.appendChild(opt);
+    });
+    // Auto-select first if available
+    if (data.databases.length > 0) {
+      sel.value = data.databases[0].path;
+      k2DbValue = data.databases[0].path;
+      document.getElementById('k2-status').textContent = `${data.databases.length} database(s) found`;
+    } else {
+      document.getElementById('k2-status').textContent = 'No databases auto-detected';
+    }
+  } catch(e) {
+    document.getElementById('k2-db-select').innerHTML =
+      '<option value="">Could not load databases</option>';
+  }
 }
+function onDbSelect() {
+  const v = document.getElementById('k2-db-select').value;
+  k2DbValue = v;
+  if (v) document.getElementById('k2-db-path').value = "";
+}
+function onDbPathInput() {
+  const v = document.getElementById('k2-db-path').value.trim();
+  k2DbValue = v;
+  if (v) document.getElementById('k2-db-select').value = "";
+}
+loadKrakenDbs();
 
 // ─── System Stats ─────────────────────────────────────────────────────────
 async function fetchStats() {
@@ -340,23 +386,18 @@ async function fetchStats() {
     if (!res.ok) return;
     const d = await res.json();
     const cpu = d.cpu, disk = d.disk;
-
-    document.getElementById('cpu-pct').textContent = cpu.percent.toFixed(1) + '%';
-    document.getElementById('cpu-detail').textContent =
-      `Budget: ${cpu.budget} / ${cpu.total_cores} threads (80% cap)`;
+    document.getElementById('cpu-pct').textContent = cpu.percent.toFixed(1)+'%';
+    document.getElementById('cpu-detail').textContent = `Budget: ${cpu.budget} / ${cpu.total_cores} threads (80% cap)`;
     const cf = document.getElementById('cpu-fill');
-    cf.style.width = cpu.percent + '%';
-    cf.className = 'gauge-fill ' + (cpu.percent > 85 ? 'bg-red-500' : cpu.percent > 60 ? 'bg-amber-500' : 'bg-indigo-500');
-
-    document.getElementById('disk-pct').textContent = disk.percent.toFixed(1) + '%';
-    document.getElementById('disk-detail').textContent =
-      `${disk.used_gb} GB used of ${disk.total_gb} GB (${disk.free_gb} GB free)`;
+    cf.style.width = cpu.percent+'%';
+    cf.className = 'gauge-fill '+(cpu.percent>85?'bg-red-500':cpu.percent>60?'bg-amber-500':'bg-indigo-500');
+    document.getElementById('disk-pct').textContent = disk.percent.toFixed(1)+'%';
+    document.getElementById('disk-detail').textContent = `${disk.used_gb} GB used of ${disk.total_gb} GB (${disk.free_gb} GB free)`;
     const df = document.getElementById('disk-fill');
-    df.style.width = disk.percent + '%';
-    df.className = 'gauge-fill ' + (disk.percent > 90 ? 'bg-red-500' : disk.percent > 75 ? 'bg-amber-500' : 'bg-violet-500');
-
-    document.getElementById('stats-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
-  } catch (e) { console.warn('Stats fetch:', e); }
+    df.style.width = disk.percent+'%';
+    df.className = 'gauge-fill '+(disk.percent>90?'bg-red-500':disk.percent>75?'bg-amber-500':'bg-violet-500');
+    document.getElementById('stats-updated').textContent = 'Updated '+new Date().toLocaleTimeString();
+  } catch(e) {}
 }
 fetchStats();
 setInterval(fetchStats, 10000);
@@ -365,26 +406,21 @@ setInterval(fetchStats, 10000);
 function handleDragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('drag-over'); }
 function handleDragLeave(e) { document.getElementById('drop-zone').classList.remove('drag-over'); }
 function handleDrop(e) {
-  e.preventDefault();
-  document.getElementById('drop-zone').classList.remove('drag-over');
-  const f = e.dataTransfer.files[0];
-  if (f) handleFileSelect(f);
+  e.preventDefault(); document.getElementById('drop-zone').classList.remove('drag-over');
+  const f = e.dataTransfer.files[0]; if (f) handleFileSelect(f);
 }
-
 function handleFileSelect(file) {
   if (!file) return;
-  const allowed = ['.fastq', '.fastq.gz', '.fq', '.fq.gz'];
+  const allowed = ['.fastq','.fastq.gz','.fq','.fq.gz'];
   if (!allowed.some(ext => file.name.toLowerCase().endsWith(ext))) {
-    alert('Only .fastq, .fastq.gz, .fq or .fq.gz files are supported.');
-    return;
+    alert('Only .fastq, .fastq.gz, .fq or .fq.gz files are supported.'); return;
   }
   selectedFile = file;
   document.getElementById('file-name').textContent = file.name;
-  document.getElementById('file-size').textContent = `(${(file.size / 1e6).toFixed(1)} MB)`;
+  document.getElementById('file-size').textContent = `(${(file.size/1e6).toFixed(1)} MB)`;
   document.getElementById('file-info').classList.remove('hidden');
   document.getElementById('upload-btn').classList.remove('hidden');
 }
-
 function clearFile() {
   selectedFile = null;
   document.getElementById('file-info').classList.add('hidden');
@@ -396,42 +432,36 @@ function clearFile() {
 async function startUpload() {
   if (!selectedFile) return;
   const btn = document.getElementById('upload-btn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Uploading...';
+  btn.disabled = true; btn.textContent = '⏳ Uploading...';
   document.getElementById('upload-progress').classList.remove('hidden');
 
   const formData = new FormData();
   formData.append('file', selectedFile);
+  formData.append('kraken2_db', k2DbValue);
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/upload');
   xhr.upload.onprogress = (e) => {
     if (e.lengthComputable) {
-      const pct = Math.round((e.loaded / e.total) * 100);
-      document.getElementById('upload-pct').textContent = pct + '%';
-      document.getElementById('upload-fill').style.width = pct + '%';
+      const pct = Math.round((e.loaded/e.total)*100);
+      document.getElementById('upload-pct').textContent = pct+'%';
+      document.getElementById('upload-fill').style.width = pct+'%';
     }
   };
   xhr.onload = () => {
     if (xhr.status === 200) {
       const data = JSON.parse(xhr.responseText);
-      currentJobId = data.job_id;
-      startTime = Date.now();
+      currentJobId = data.job_id; startTime = Date.now();
       showProgressCard(data.job_id);
       pollTimer = setInterval(() => checkStatus(data.job_id), 4000);
     } else {
       let msg = 'Upload failed.';
       try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
       showError(msg);
-      btn.disabled = false;
-      btn.textContent = '🚀 Start Analysis';
+      btn.disabled = false; btn.textContent = '🚀 Start Analysis';
     }
   };
-  xhr.onerror = () => {
-    showError('A network error occurred. Please try again.');
-    btn.disabled = false;
-    btn.textContent = '🚀 Start Analysis';
-  };
+  xhr.onerror = () => { showError('Network error. Please try again.'); btn.disabled=false; btn.textContent='🚀 Start Analysis'; };
   xhr.send(formData);
 }
 
@@ -443,15 +473,9 @@ async function checkStatus(jobId) {
     const data = await res.json();
     updateStages(data.stages || {});
     updateOverallStatus(data.status);
-
-    if (data.status === 'completed') {
-      clearInterval(pollTimer);
-      showResults(jobId, data.stages || {});
-    } else if (data.status === 'failed') {
-      clearInterval(pollTimer);
-      showError(data.error || 'An unknown error occurred during analysis.');
-    }
-  } catch (e) { console.error('Poll:', e); }
+    if (data.status === 'completed') { clearInterval(pollTimer); showResults(jobId, data.stages || {}); }
+    else if (data.status === 'failed') { clearInterval(pollTimer); showError(data.error || 'Unknown error.'); }
+  } catch(e) { console.error('Poll:', e); }
 }
 
 // ─── Stage Display ────────────────────────────────────────────────────────
@@ -459,113 +483,119 @@ function updateStages(stages) {
   const container = document.getElementById('stages-list');
   let doneCount = 0;
   const rows = STAGE_ORDER.map(key => {
-    const stage = stages[key] || { status: 'pending' };
-    let dotClass = 'dot-pending', statusText = 'Pending';
-    if (stage.status === 'running')  { dotClass = 'dot-running'; statusText = 'Running...'; }
-    else if (stage.status === 'done')    { dotClass = 'dot-done';    statusText = 'Done'; doneCount++; }
-    else if (stage.status === 'failed')  { dotClass = 'dot-failed';  statusText = 'Failed'; }
-    else if (stage.status === 'skipped') { dotClass = 'dot-skipped'; statusText = 'Skipped'; doneCount++; }
+    const stage = stages[key] || {status:'pending'};
+    let dotClass='dot-pending', statusText='Pending';
+    if (stage.status==='running')  { dotClass='dot-running'; statusText='Running...'; }
+    else if (stage.status==='done')    { dotClass='dot-done'; statusText='Done'; doneCount++; }
+    else if (stage.status==='failed')  { dotClass='dot-failed'; statusText='Failed'; }
+    else if (stage.status==='skipped') { dotClass='dot-skipped'; statusText='Skipped'; doneCount++; }
     return `<div class="flex items-center justify-between py-1.5">
       <div class="flex items-center">
         <span class="stage-dot ${dotClass}"></span>
-        <span class="text-slate-700 text-sm">${STAGE_LABELS[key] || key}</span>
+        <span class="text-slate-700 text-sm">${STAGE_LABELS[key]||key}</span>
       </div>
       <span class="text-xs text-slate-400">${statusText}</span>
     </div>`;
   });
   container.innerHTML = rows.join('');
-  const pct = Math.max(5, Math.round((doneCount / STAGE_ORDER.length) * 100));
-  document.getElementById('overall-fill').style.width = pct + '%';
+  const pct = Math.max(5, Math.round((doneCount/STAGE_ORDER.length)*100));
+  document.getElementById('overall-fill').style.width = pct+'%';
   if (startTime && doneCount > 0) {
-    const elapsed = (Date.now() - startTime) / 1000;
-    const remain = Math.max(0, (elapsed / doneCount) * STAGE_ORDER.length - elapsed);
-    const mins = Math.ceil(remain / 60);
+    const elapsed = (Date.now()-startTime)/1000;
+    const remain = Math.max(0,(elapsed/doneCount)*STAGE_ORDER.length-elapsed);
+    const mins = Math.ceil(remain/60);
     document.getElementById('eta-text').textContent =
-      mins > 1 ? `Estimated time remaining: ~${mins} min` : 'Almost done...';
+      mins>1 ? `Estimated time remaining: ~${mins} min` : 'Almost done...';
   }
 }
-
 function updateOverallStatus(status) {
   const el = document.getElementById('overall-status');
   const map = {
-    queued:     ['Queued',      'bg-slate-100 text-slate-600'],
-    running:    ['Running',     'bg-amber-100 text-amber-700'],
-    ai_pending: ['AI Analysis', 'bg-violet-100 text-violet-700'],
-    completed:  ['Completed',   'bg-emerald-100 text-emerald-700'],
-    failed:     ['Failed',      'bg-red-100 text-red-700'],
+    queued:['Queued','bg-slate-100 text-slate-600'],
+    running:['Running','bg-amber-100 text-amber-700'],
+    ai_pending:['AI Analysis','bg-violet-100 text-violet-700'],
+    completed:['Completed','bg-emerald-100 text-emerald-700'],
+    failed:['Failed','bg-red-100 text-red-700'],
   };
-  const [label, cls] = map[status] || ['Unknown', 'bg-slate-100 text-slate-600'];
-  el.textContent = label;
-  el.className = `px-3 py-1 rounded-full text-sm font-semibold ${cls}`;
+  const [label,cls] = map[status]||['Unknown','bg-slate-100 text-slate-600'];
+  el.textContent=label; el.className=`px-3 py-1 rounded-full text-sm font-semibold ${cls}`;
 }
 
 // ─── Results Summary ──────────────────────────────────────────────────────
 function showResults(jobId, stages) {
   document.getElementById('progress-card').classList.add('hidden');
-
-  // Links
   document.getElementById('view-link').href   = `/view/${jobId}`;
   document.getElementById('report-link').href = `/report/${jobId}`;
   document.getElementById('result-job-label').textContent = `Job ID: ${jobId}`;
 
-  // ── QC ──
+  // Kraken2
+  const k2Data = tryJSON(stages.kraken2?.detail) || {};
+  if (k2Data.top_taxa && k2Data.top_taxa.length > 0) {
+    const section = document.getElementById('k2-section');
+    section.classList.remove('hidden');
+    document.getElementById('k2-classified').textContent =
+      `${k2Data.classified_percent}% of reads classified · ${k2Data.unclassified_percent}% unclassified`;
+    const maxPct = k2Data.top_taxa[0].percent || 1;
+    document.getElementById('k2-bars').innerHTML = k2Data.top_taxa.map(t => {
+      const w = Math.round(t.percent/maxPct*100);
+      return `<div class="kraken-bar-row">
+        <div class="kraken-name" title="${t.name}">${t.name}</div>
+        <div class="kraken-track"><div class="kraken-fill" style="width:${w}%"></div></div>
+        <div class="kraken-pct">${t.percent}%</div>
+      </div>`;
+    }).join('');
+  }
+
+  // QC
   const qcData = tryJSON(stages.qc?.detail) || {};
-  const qcGrid = document.getElementById('qc-grid');
-  const readType = (stages.detect?.detail || '').toUpperCase() || '—';
+  const readType = (stages.detect?.detail||'').toUpperCase()||'—';
   let qcCards = metricCard('Read Type', readType);
+  if (qcData.total_reads !== undefined)     qcCards += metricCard('Total Reads', Number(qcData.total_reads).toLocaleString());
+  if (qcData.total_bases !== undefined)     qcCards += metricCard('Total Bases', fmt(Number(qcData.total_bases)));
+  if (qcData.mean_read_length !== undefined) qcCards += metricCard('Mean Length', fmt(Number(qcData.mean_read_length)), 'bp');
+  if (qcData.mean_quality !== undefined)    qcCards += metricCard('Mean Quality', qcData.mean_quality, 'Q');
+  if (qcData.q30_rate !== undefined)        qcCards += metricCard('Q30 Rate', qcData.q30_rate+'%');
+  if (qcData.n50 !== undefined)             qcCards += metricCard('Read N50', fmt(Number(qcData.n50)), 'bp');
+  document.getElementById('qc-grid').innerHTML = qcCards;
 
-  if (qcData.total_reads !== undefined)
-    qcCards += metricCard('Total Reads', Number(qcData.total_reads).toLocaleString());
-  if (qcData.total_bases !== undefined)
-    qcCards += metricCard('Total Bases', fmt(Number(qcData.total_bases)));
-  if (qcData.mean_read_length !== undefined)
-    qcCards += metricCard('Mean Read Length', fmt(Number(qcData.mean_read_length)), 'bp');
-  if (qcData.mean_quality !== undefined)
-    qcCards += metricCard('Mean Quality', qcData.mean_quality, 'Q score');
-  if (qcData.q30_rate !== undefined)
-    qcCards += metricCard('Q30 Rate', qcData.q30_rate + '%');
-  if (qcData.n50 !== undefined)
-    qcCards += metricCard('Read N50', fmt(Number(qcData.n50)), 'bp');
-
-  qcGrid.innerHTML = qcCards;
-
-  // ── Assembly ──
+  // Assembly stats
   const asmData = tryJSON(stages.assembly?.detail) || {};
-  const asmGrid = document.getElementById('asm-grid');
   let asmCards = '';
+  if (asmData.total_contigs !== undefined)     asmCards += metricCard('Contigs', asmData.total_contigs.toLocaleString());
+  if (asmData.total_length_bp !== undefined)   asmCards += metricCard('Total Length', fmt(asmData.total_length_bp), 'bp');
+  if (asmData.n50_bp !== undefined)            asmCards += metricCard('N50', fmt(asmData.n50_bp), 'bp');
+  if (asmData.largest_contig_bp !== undefined) asmCards += metricCard('Largest Contig', fmt(asmData.largest_contig_bp), 'bp');
+  if (asmData.gc_percent !== undefined)        asmCards += metricCard('GC Content', asmData.gc_percent+'%');
+  if (asmData.method) asmCards += metricCard('Method', asmData.method.replace('_',' '));
+  document.getElementById('asm-grid').innerHTML = asmCards || '<p class="text-slate-400 text-sm col-span-5">No assembly data.</p>';
 
-  if (asmData.total_contigs !== undefined)
-    asmCards += metricCard('Contigs', asmData.total_contigs.toLocaleString());
-  if (asmData.total_length_bp !== undefined)
-    asmCards += metricCard('Total Length', fmt(asmData.total_length_bp), 'bp');
-  if (asmData.n50_bp !== undefined)
-    asmCards += metricCard('N50', fmt(asmData.n50_bp), 'bp');
-  if (asmData.largest_contig_bp !== undefined)
-    asmCards += metricCard('Largest Contig', fmt(asmData.largest_contig_bp), 'bp');
-  if (asmData.gc_percent !== undefined)
-    asmCards += metricCard('GC Content', asmData.gc_percent + '%');
+  // Assembly QC checks
+  const checks = asmData.qc_checks || [];
+  const QC_STYLE = { pass:'qc-pass', warn:'qc-warn', fail:'qc-fail' };
+  const QC_ICON  = { pass:'✅', warn:'⚠️', fail:'❌' };
+  document.getElementById('asm-qc-checks').innerHTML = checks.length
+    ? checks.map(c => {
+        let disp = c.value;
+        if (typeof disp==='number') { if(disp>=1e6) disp=(disp/1e6).toFixed(2)+' Mb'; else if(disp>=1e3) disp=(disp/1e3).toFixed(1)+' kb'; }
+        return `<span class="qc-badge ${QC_STYLE[c.status]||'qc-warn'}" title="${c.threshold}">
+          ${QC_ICON[c.status]||'⚠️'} ${c.metric}: ${disp}${c.unit}
+        </span>`;
+      }).join('')
+    : '<span class="text-slate-400 text-sm">No QC data.</span>';
 
-  asmGrid.innerHTML = asmCards || '<p class="text-slate-400 text-sm col-span-5">Assembly data not available.</p>';
-
-  // ── MLST ──
+  // MLST
   const mlstData = tryJSON(stages.mlst?.detail) || {};
   document.getElementById('mlst-scheme').textContent = mlstData.scheme || '—';
-  document.getElementById('mlst-st').textContent     = mlstData.st ? 'ST' + mlstData.st : '—';
+  document.getElementById('mlst-st').textContent     = mlstData.st ? 'ST'+mlstData.st : '—';
   const alleles = mlstData.alleles || [];
-  document.getElementById('mlst-alleles').textContent =
-    alleles.length ? 'Alleles: ' + alleles.join(', ') : '';
+  document.getElementById('mlst-alleles').textContent = alleles.length ? 'Alleles: '+alleles.join(', ') : '';
 
-  // ── AMR ──
-  const amrData  = tryJSON(stages.amr?.detail) || {};
-  const genes    = amrData.genes || [];
-  const amrPills = document.getElementById('amr-pills');
-  if (genes.length === 0) {
-    amrPills.innerHTML = '<span class="amr-pill none">✅ No AMR genes detected</span>';
-  } else {
-    amrPills.innerHTML = genes.map(g =>
-      `<span class="amr-pill" title="${g.class} · ${g.identity}% identity">${g.gene}</span>`
-    ).join('');
-  }
+  // AMR
+  const amrData = tryJSON(stages.amr?.detail) || {};
+  const genes   = amrData.genes || [];
+  document.getElementById('amr-pills').innerHTML = genes.length===0
+    ? '<span class="amr-pill none">✅ No AMR genes detected</span>'
+    : genes.map(g=>`<span class="amr-pill" title="${g.class} · ${g.identity}% identity">${g.gene}</span>`).join('');
 
   document.getElementById('results-card').classList.remove('hidden');
 }
@@ -577,14 +607,12 @@ function showProgressCard(jobId) {
   document.getElementById('display-job-id').textContent = jobId;
   updateStages({});
 }
-
 function showError(msg) {
   document.getElementById('progress-card').classList.add('hidden');
   document.getElementById('upload-card').classList.add('hidden');
   document.getElementById('error-card').classList.remove('hidden');
   document.getElementById('error-msg').textContent = msg;
 }
-
 function resetAll() { location.reload(); }
 </script>
 </body>

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiofiles
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +24,7 @@ import cleanup
 import database as db
 from ai_interpreter import interpret
 from config import (
-    JOB_EXPIRY_HOURS, MAX_FILE_SIZE_MB,
+    JOB_EXPIRY_HOURS, KRAKEN2_DEFAULT_DB, MAX_FILE_SIZE_MB,
     RATE_LIMIT, RESULTS_DIR, UPLOAD_DIR,
 )
 from pipeline import run_pipeline
@@ -93,7 +93,23 @@ def _ip_hash(request: Request) -> str:
     return hashlib.sha256(ip.encode()).hexdigest()[:16]
 
 
-def _run_full_pipeline(job_id: str, fastq_path: Path) -> None:
+def _resolve_kraken2_db(raw: str) -> Path | None:
+    """
+    Validates and returns the Kraken2 database path.
+    Accepts user-supplied path or falls back to the configured default.
+    Returns None if no valid DB is found.
+    """
+    candidate = Path(raw.strip()) if raw and raw.strip() else KRAKEN2_DEFAULT_DB
+    if candidate.is_dir() and (candidate / "hash.k2d").exists():
+        return candidate
+    # Try default
+    if KRAKEN2_DEFAULT_DB.is_dir() and (KRAKEN2_DEFAULT_DB / "hash.k2d").exists():
+        return KRAKEN2_DEFAULT_DB
+    return None
+
+
+def _run_full_pipeline(job_id: str, fastq_path: Path,
+                       kraken2_db: Path | None = None) -> None:
     """Runs the full pipeline + AI interpretation + primer design in a background thread."""
     try:
         logger.info("[%s] Pipeline starting: %s", job_id, fastq_path)
@@ -101,7 +117,7 @@ def _run_full_pipeline(job_id: str, fastq_path: Path) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Genomic pipeline
-        pipeline_results = run_pipeline(job_id, fastq_path)
+        pipeline_results = run_pipeline(job_id, fastq_path, kraken2_db=kraken2_db)
         if pipeline_results.get("error"):
             return
 
@@ -113,7 +129,7 @@ def _run_full_pipeline(job_id: str, fastq_path: Path) -> None:
         # 3. Primer design — skipped if assembly failed or no AMR/AI targets found
         assembly_fasta = pipeline_results.get("assembly_fasta")
         fasta_path = Path(assembly_fasta) if assembly_fasta else None
-        amr_count = pipeline_results.get("amr", {}).get("count", 0)
+        amr_count  = pipeline_results.get("amr", {}).get("count", 0)
         ai_targets = ai_results.get("pcr_targets", [])
         has_targets = amr_count > 0 or len(ai_targets) > 0
         assembly_ok = fasta_path and fasta_path.exists()
@@ -122,12 +138,10 @@ def _run_full_pipeline(job_id: str, fastq_path: Path) -> None:
             db.update_stage(job_id, "primers", "skipped",
                             "Assembly did not produce a FASTA — primer design skipped.")
             primer_results = []
-            logger.warning("[%s] Primer design skipped: no assembly FASTA.", job_id)
         elif not has_targets:
             db.update_stage(job_id, "primers", "skipped",
                             "No AMR genes or AI PCR targets found — primer design skipped.")
             primer_results = []
-            logger.info("[%s] Primer design skipped: no targets.", job_id)
         else:
             db.update_stage(job_id, "primers", "running")
             primer_results = design_all_primers(
@@ -158,11 +172,50 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+@app.get("/kraken2-databases")
+async def list_kraken2_databases():
+    """
+    Scans common locations for valid Kraken2 databases (contain hash.k2d).
+    Returns a list of {label, path} objects for the UI dropdown.
+    """
+    search_roots = [
+        Path("/home/analysis/databases_all"),
+        Path("/home/analysis/databases"),
+        Path("/data/kraken2"),
+        Path("/opt/databases"),
+    ]
+    found = []
+    seen = set()
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for p in root.rglob("hash.k2d"):
+            db_dir = p.parent
+            key = str(db_dir.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append({"label": db_dir.name, "path": str(db_dir)})
+
+    # Always include the configured default if not already found
+    default_key = str(KRAKEN2_DEFAULT_DB.resolve())
+    if default_key not in seen and KRAKEN2_DEFAULT_DB.is_dir():
+        found.insert(0, {"label": KRAKEN2_DEFAULT_DB.name + " (default)",
+                         "path": str(KRAKEN2_DEFAULT_DB)})
+
+    return JSONResponse({"databases": found})
+
+
 @app.post("/upload")
 @limiter.limit(RATE_LIMIT)
-async def upload_fastq(request: Request, file: UploadFile = File(...)):
+async def upload_fastq(
+    request: Request,
+    file: UploadFile = File(...),
+    kraken2_db: str = Form(default=""),
+):
     """
     Securely uploads a FASTQ/FASTQ.gz file and starts the analysis pipeline.
+    Optional kraken2_db form field specifies the Kraken2 database path.
 
     Security checks:
     - Filename sanitisation
@@ -190,10 +243,10 @@ async def upload_fastq(request: Request, file: UploadFile = File(...)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    job_id  = generate_job_id()
-    up_dir  = job_upload_dir(job_id)
+    job_id = generate_job_id()
+    up_dir = job_upload_dir(job_id)
     up_dir.mkdir(parents=True, exist_ok=True)
-    dest    = up_dir / safe_name
+    dest   = up_dir / safe_name
 
     total_bytes = len(first_chunk)
     try:
@@ -222,24 +275,27 @@ async def upload_fastq(request: Request, file: UploadFile = File(...)):
     ).isoformat()
     db.create_job(job_id, safe_name, expires_at, ip_hash, md5)
 
-    logger.info("New job: %s | File: %s | %d bytes | MD5: %s",
-                job_id, safe_name, total_bytes, md5)
+    resolved_db = _resolve_kraken2_db(kraken2_db)
+    logger.info("New job: %s | File: %s | %d bytes | MD5: %s | Kraken2 DB: %s",
+                job_id, safe_name, total_bytes, md5,
+                str(resolved_db) if resolved_db else "none")
 
     t = threading.Thread(
         target=_run_full_pipeline,
-        args=(job_id, dest),
+        args=(job_id, dest, resolved_db),
         daemon=True,
         name=f"pipeline-{job_id[:8]}",
     )
     t.start()
 
     return JSONResponse({
-        "job_id":     job_id,
-        "filename":   safe_name,
-        "size_mb":    round(total_bytes / 1e6, 2),
-        "md5":        md5,
-        "expires_at": expires_at,
-        "message":    "Analysis started. Poll /status/{job_id} for progress.",
+        "job_id":       job_id,
+        "filename":     safe_name,
+        "size_mb":      round(total_bytes / 1e6, 2),
+        "md5":          md5,
+        "expires_at":   expires_at,
+        "kraken2_db":   str(resolved_db) if resolved_db else None,
+        "message":      "Analysis started. Poll /status/{job_id} for progress.",
     })
 
 
@@ -313,32 +369,20 @@ async def download_report(request: Request, job_id: str):
 async def system_stats():
     """Returns CPU and disk usage for the server status widget."""
     import psutil
-    from config import MAX_THREADS, RESULTS_DIR, UPLOAD_DIR
-
-    cpu_percent  = psutil.cpu_percent(interval=0.2)
-    cpu_count    = psutil.cpu_count(logical=True)
-
+    cpu_percent = psutil.cpu_percent(interval=0.2)
+    cpu_count   = psutil.cpu_count(logical=True)
     disk = psutil.disk_usage("/")
-    data_dir = RESULTS_DIR.parent
-    try:
-        data_disk = psutil.disk_usage(str(data_dir))
-        data_used_gb  = round(data_disk.used / 1e9, 1)
-        data_total_gb = round(data_disk.total / 1e9, 1)
-        data_percent  = data_disk.percent
-    except Exception:
-        data_used_gb = data_total_gb = data_percent = None
-
     return JSONResponse({
         "cpu": {
             "percent":     cpu_percent,
             "total_cores": cpu_count,
-            "budget":      MAX_THREADS,
+            "budget":      __import__("config").MAX_THREADS,
         },
         "disk": {
-            "total_gb":  round(disk.total / 1e9, 1),
-            "used_gb":   round(disk.used / 1e9, 1),
-            "free_gb":   round(disk.free / 1e9, 1),
-            "percent":   disk.percent,
+            "total_gb": round(disk.total / 1e9, 1),
+            "used_gb":  round(disk.used  / 1e9, 1),
+            "free_gb":  round(disk.free  / 1e9, 1),
+            "percent":  disk.percent,
         },
     })
 

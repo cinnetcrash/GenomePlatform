@@ -70,6 +70,90 @@ def _primer_rows(primer_list: list[dict]) -> str:
     return "\n".join(rows)
 
 
+def _kraken2_section(k2: dict) -> str:
+    """Renders Kraken2 results as a horizontal CSS bar chart."""
+    if not k2:
+        return "<p style='color:#6b7280'>Kraken2 was not run for this analysis.</p>"
+
+    classified = k2.get("classified_percent", 0)
+    unclassified = k2.get("unclassified_percent", 100)
+    taxa = k2.get("top_taxa", [])
+
+    summary = (
+        f"<p style='margin-bottom:1rem'>"
+        f"<strong>{classified}%</strong> of reads classified &nbsp;|&nbsp; "
+        f"{unclassified}% unclassified</p>"
+    )
+
+    if not taxa:
+        return summary + "<p style='color:#6b7280'>No species-level hits above 0.01%.</p>"
+
+    bars = []
+    max_pct = taxa[0]["percent"] if taxa else 1
+    for t in taxa:
+        bar_w = round(t["percent"] / max_pct * 100, 1)
+        color  = "#6366f1" if t["percent"] >= 5 else "#a5b4fc"
+        bars.append(f"""
+      <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem">
+        <div style="width:200px;font-size:.8rem;color:#334155;white-space:nowrap;
+                    overflow:hidden;text-overflow:ellipsis" title="{t['name']}">
+          <em>{t['name']}</em>
+        </div>
+        <div style="flex:1;background:#e2e8f0;border-radius:9999px;height:14px;overflow:hidden">
+          <div style="width:{bar_w}%;background:{color};height:100%;border-radius:9999px"></div>
+        </div>
+        <div style="width:48px;text-align:right;font-size:.8rem;font-weight:600;
+                    color:#1e40af;font-family:monospace">{t['percent']}%</div>
+        <div style="width:70px;text-align:right;font-size:.75rem;color:#94a3b8;
+                    font-family:monospace">{t['reads']:,} reads</div>
+      </div>""")
+
+    return summary + "\n".join(bars)
+
+
+def _assembly_qc_section(qc_checks: list[dict]) -> str:
+    """Renders assembly QC pass/warn/fail indicators."""
+    if not qc_checks:
+        return "<p style='color:#6b7280'>Assembly QC data not available.</p>"
+
+    STATUS_STYLE = {
+        "pass": ("&#x2705;", "#166534", "#f0fdf4", "#bbf7d0"),
+        "warn": ("&#x26A0;&#xFE0F;", "#92400e", "#fffbeb", "#fde68a"),
+        "fail": ("&#x274C;",  "#991b1b", "#fef2f2", "#fecaca"),
+    }
+
+    cards = []
+    for c in qc_checks:
+        icon, text_c, bg, border = STATUS_STYLE.get(c["status"], STATUS_STYLE["warn"])
+        val = c["value"]
+        if isinstance(val, (int, float)):
+            if val >= 1_000_000:
+                display = f"{val/1_000_000:.2f} Mb"
+            elif val >= 1_000:
+                display = f"{val/1_000:.1f} kb"
+            else:
+                display = str(val)
+        else:
+            display = str(val)
+        if c["unit"] and c["unit"] not in display:
+            display += f" {c['unit']}"
+
+        cards.append(f"""
+      <div style="background:{bg};border:1px solid {border};border-radius:10px;
+                  padding:.9rem 1rem;display:flex;align-items:center;gap:.7rem">
+        <span style="font-size:1.1rem">{icon}</span>
+        <div>
+          <div style="font-size:.72rem;color:#64748b;text-transform:uppercase;
+                      letter-spacing:.04em">{c['metric']}</div>
+          <div style="font-size:1.1rem;font-weight:700;color:{text_c}">{display}</div>
+          <div style="font-size:.7rem;color:#94a3b8;margin-top:.1rem">{c['threshold']}</div>
+        </div>
+      </div>""")
+
+    return f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:.75rem">' \
+           + "\n".join(cards) + "</div>"
+
+
 def _amr_table(genes: list[dict]) -> str:
     if not genes:
         return "<p style='color:#22c55e'>&#x2705; No AMR genes detected.</p>"
@@ -103,6 +187,7 @@ def generate_html_report(job_id: str,
     qc          = pipeline_results.get("qc", {})
     mlst        = pipeline_results.get("mlst", {})
     amr         = pipeline_results.get("amr", {})
+    kraken2     = pipeline_results.get("kraken2") or {}
 
     risk        = ai_results.get("risk_level", "UNKNOWN").upper()
     risk_color, risk_bg = RISK_COLORS.get(risk, RISK_COLORS["UNKNOWN"])
@@ -216,6 +301,14 @@ def generate_html_report(job_id: str,
 
 <div class="container">
 
+  <!-- Kraken2 -->
+  <div class="section">
+    <div class="section-title">&#x1F9AB; Taxonomic Classification (Kraken2)</div>
+    <div class="section-body">
+      {_kraken2_section(kraken2)}
+    </div>
+  </div>
+
   <!-- QC -->
   <div class="section">
     <div class="section-title">&#x1F4CA; Quality Control (QC)</div>
@@ -227,6 +320,14 @@ def generate_html_report(job_id: str,
             for k, v in qc.items()
         ) or '<p style="color:#6b7280">No QC data available.</p>'}
       </div>
+    </div>
+  </div>
+
+  <!-- Assembly QC -->
+  <div class="section">
+    <div class="section-title">&#x1F527; Assembly Quality Control</div>
+    <div class="section-body">
+      {_assembly_qc_section(pipeline_results.get("assembly_qc_checks", []))}
     </div>
   </div>
 

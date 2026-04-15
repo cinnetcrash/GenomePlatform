@@ -57,6 +57,27 @@ TOOLS = {
     "primer3":   "/usr/bin/primer3_core",
 }
 
+# === Autocycler ===
+AUTOCYCLER_BIN = Path("/home/analysis/Autocycler/target/release/autocycler")
+
+# === Kraken2 ===
+KRAKEN2_DEFAULT_DB = Path("/home/analysis/databases_all/kraken2_db")
+
+# === Assembly QC Thresholds ===
+ASSEMBLY_QC = {
+    "n50_bp":           {"pass_min": 100_000, "warn_min": 20_000,
+                         "label": "N50", "unit": "bp"},
+    "total_contigs":    {"pass_max": 200,     "warn_max": 500,
+                         "label": "Contig count", "unit": ""},
+    "total_length_bp":  {"pass_min": 2_000_000, "pass_max": 8_000_000,
+                         "warn_min": 1_000_000,  "warn_max": 12_000_000,
+                         "label": "Total length", "unit": "bp"},
+    "gc_percent":       {"pass_min": 25, "pass_max": 75,
+                         "label": "GC content", "unit": "%"},
+    "largest_contig_bp":{"warn_min": 50_000,
+                         "label": "Largest contig", "unit": "bp"},
+}
+
 # === Claude API ===
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL      = "claude-sonnet-4-6"
