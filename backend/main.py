@@ -23,6 +23,7 @@ from slowapi.util import get_remote_address
 sys.path.insert(0, str(Path(__file__).parent))
 import cleanup
 import database as db
+import system_check as sc
 from ai_interpreter import interpret
 from config import (
     JOB_EXPIRY_HOURS, KRAKEN2_DEFAULT_DB, MAX_FILE_SIZE_MB,
@@ -419,6 +420,12 @@ async def system_stats():
             "percent":  disk.percent,
         },
     })
+
+
+@app.get("/system-check")
+async def system_check():
+    """Scans installed tools and databases; reports what is present or missing."""
+    return JSONResponse(sc.run_system_check())
 
 
 @app.get("/health")
