@@ -95,31 +95,43 @@
     <!-- Upload Card -->
     <div id="upload-card" class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
       <div class="px-8 py-6 border-b border-slate-100">
-        <h2 class="text-lg font-semibold text-slate-800">Upload FASTQ File</h2>
-        <p class="text-sm text-slate-500 mt-1">MinION or Illumina FASTQ / FASTQ.gz — maximum 2 GB</p>
+        <h2 class="text-lg font-semibold text-slate-800">Upload Samples</h2>
+        <p class="text-sm text-slate-500 mt-1">
+          Drag one or more FASTQ files — R1/R2 pairs are grouped automatically · max 2 GB per file
+        </p>
       </div>
       <div class="px-8 py-6 space-y-5">
 
-        <!-- Drop zone -->
+        <!-- Multi-file drop zone -->
         <div id="drop-zone"
              class="drop-zone rounded-xl bg-slate-50 p-10 text-center cursor-pointer"
              onclick="document.getElementById('file-input').click()"
-             ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
+             ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
           <div class="text-5xl mb-3">📂</div>
-          <p class="text-slate-600 font-medium">Drag and drop your file here, or click to browse</p>
-          <p class="text-slate-400 text-sm mt-1">.fastq · .fastq.gz · .fq · .fq.gz</p>
-          <input id="file-input" type="file" accept=".fastq,.fastq.gz,.fq,.fq.gz" class="hidden"
-                 onchange="handleFileSelect(this.files[0])">
+          <p class="text-slate-600 font-medium">Drag & drop files here, or click to browse</p>
+          <p class="text-slate-400 text-sm mt-1">
+            MinION: single file · Illumina PE: drop R1 + R2 together<br>
+            <span class="font-mono text-xs">.fastq · .fastq.gz · .fq · .fq.gz</span>
+          </p>
+          <input id="file-input" type="file" multiple
+                 accept=".fastq,.fastq.gz,.fq,.fq.gz" class="hidden"
+                 onchange="addFiles(this.files)">
         </div>
 
-        <!-- File info -->
-        <div id="file-info" class="hidden p-4 bg-indigo-50 rounded-lg border border-indigo-100">
-          <div class="flex items-center justify-between">
-            <div>
-              <span class="font-medium text-indigo-700" id="file-name"></span>
-              <span class="text-slate-500 text-sm ml-2" id="file-size"></span>
+        <!-- Sample queue table -->
+        <div id="sample-queue" class="hidden">
+          <div class="flex items-center justify-between mb-2">
+            <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Sample Queue</p>
+            <button onclick="clearQueue()" class="text-xs text-slate-400 hover:text-red-500">Clear all</button>
+          </div>
+          <div id="sample-table" class="border border-slate-200 rounded-xl overflow-hidden text-sm">
+            <div class="grid grid-cols-12 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wide border-b border-slate-200">
+              <div class="col-span-5">Sample</div>
+              <div class="col-span-3">Type</div>
+              <div class="col-span-3">Size</div>
+              <div class="col-span-1"></div>
             </div>
-            <button onclick="clearFile()" class="text-slate-400 hover:text-red-500 text-sm">✕</button>
+            <div id="sample-rows"></div>
           </div>
         </div>
 
@@ -147,7 +159,7 @@
         </div>
 
         <!-- Upload button -->
-        <button id="upload-btn" onclick="startUpload()"
+        <button id="upload-btn" onclick="startAllUploads()"
                 class="hidden w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700
                        text-white font-semibold rounded-xl transition-colors duration-200
                        disabled:opacity-50 disabled:cursor-not-allowed">
@@ -157,14 +169,17 @@
         <!-- Upload progress -->
         <div id="upload-progress" class="hidden">
           <div class="flex justify-between text-sm text-slate-500 mb-1">
-            <span>Uploading...</span><span id="upload-pct">0%</span>
+            <span id="upload-label">Uploading...</span><span id="upload-pct">0%</span>
           </div>
           <div class="progress-bar"><div class="progress-fill" id="upload-fill" style="width:0%"></div></div>
         </div>
       </div>
     </div>
 
-    <!-- Progress Card -->
+    <!-- Multi-job progress container -->
+    <div id="jobs-container" class="space-y-4"></div>
+
+    <!-- Progress Card (legacy single-job, kept for compatibility) -->
     <div id="progress-card" class="hidden bg-white rounded-2xl shadow-sm border border-slate-100">
       <div class="px-8 py-5 border-b border-slate-100 flex items-center justify-between">
         <div>
@@ -334,11 +349,95 @@
 
 <script>
 // ─── State ────────────────────────────────────────────────────────────────
-let selectedFile = null;
-let currentJobId = null;
-let pollTimer    = null;
-let startTime    = null;
-let k2DbValue    = "";   // final DB path sent with upload
+let sampleQueue   = [];   // [{name, r1, r2, type, sizeMb}]
+let activeJobs    = {};   // jobId → {name, startTime, pollTimer}
+let k2DbValue     = "";
+// legacy single-job refs (kept for resetAll / showResults)
+let currentJobId  = null;
+let pollTimer     = null;
+let startTime     = null;
+
+// ─── File Grouping ────────────────────────────────────────────────────────
+const ALLOWED_EXTS = ['.fastq','.fastq.gz','.fq','.fq.gz'];
+
+function stripExt(name) {
+  return name.replace(/\.(fastq|fq)(\.gz)?$/i, '');
+}
+function detectRole(base) {
+  if (/[_\-\.]R1([_\-\.]|$)/i.test(base) || /[_\-\.]1([_\-\.]|$)/.test(base)) return 'r1';
+  if (/[_\-\.]R2([_\-\.]|$)/i.test(base) || /[_\-\.]2([_\-\.]|$)/.test(base)) return 'r2';
+  return 'single';
+}
+function sampleBase(base, role) {
+  if (role === 'r1') return base.replace(/[_\-\.]R1([_\-\.].*)?$/i, '').replace(/[_\-\.]1([_\-\.].*)?$/, '');
+  if (role === 'r2') return base.replace(/[_\-\.]R2([_\-\.].*)?$/i, '').replace(/[_\-\.]2([_\-\.].*)?$/, '');
+  return base;
+}
+
+function groupFiles(files) {
+  const buckets = {};   // sampleName → {r1, r2}
+  for (const f of files) {
+    const base = stripExt(f.name);
+    const role = detectRole(base);
+    const key  = sampleBase(base, role);
+    if (!buckets[key]) buckets[key] = {r1: null, r2: null};
+    if (role === 'r2') buckets[key].r2 = f;
+    else               buckets[key].r1 = f;   // 'single' also goes to r1
+  }
+  return Object.entries(buckets).map(([name, {r1, r2}]) => {
+    const type = r2 ? 'Illumina PE' : 'Auto-detect';
+    const mb   = ((r1?.size||0) + (r2?.size||0)) / 1e6;
+    return {name, r1, r2, type, sizeMb: mb};
+  });
+}
+
+function addFiles(fileList) {
+  const valid = [...fileList].filter(f =>
+    ALLOWED_EXTS.some(ext => f.name.toLowerCase().endsWith(ext))
+  );
+  if (!valid.length) { alert('No valid FASTQ files found.'); return; }
+  const newSamples = groupFiles(valid);
+  // Merge: avoid duplicate sample names
+  for (const s of newSamples) {
+    if (!sampleQueue.find(q => q.name === s.name)) sampleQueue.push(s);
+  }
+  renderQueue();
+}
+
+function renderQueue() {
+  const hasItems = sampleQueue.length > 0;
+  document.getElementById('sample-queue').classList.toggle('hidden', !hasItems);
+  document.getElementById('upload-btn').classList.toggle('hidden', !hasItems);
+
+  document.getElementById('sample-rows').innerHTML = sampleQueue.map((s, i) => `
+    <div class="grid grid-cols-12 items-center px-4 py-2.5 border-b border-slate-100 last:border-0
+                hover:bg-slate-50 transition-colors">
+      <div class="col-span-5 font-medium text-slate-700 truncate" title="${s.name}">${s.name}</div>
+      <div class="col-span-3">
+        <span class="inline-block px-2 py-0.5 rounded-full text-xs font-semibold
+          ${s.r2 ? 'bg-violet-100 text-violet-700' : 'bg-indigo-100 text-indigo-700'}">
+          ${s.type}
+        </span>
+      </div>
+      <div class="col-span-3 text-slate-500 text-xs">${s.sizeMb.toFixed(1)} MB</div>
+      <div class="col-span-1 text-right">
+        <button onclick="removeSample(${i})" class="text-slate-300 hover:text-red-500 text-sm">✕</button>
+      </div>
+    </div>
+  `).join('');
+
+  const btn = document.getElementById('upload-btn');
+  if (hasItems) btn.textContent = `🚀 Start Analysis (${sampleQueue.length} sample${sampleQueue.length>1?'s':''})`;
+}
+
+function removeSample(i) {
+  sampleQueue.splice(i, 1);
+  renderQueue();
+}
+function clearQueue() {
+  sampleQueue = [];
+  renderQueue();
+}
 
 const STAGE_LABELS = {
   detect:     "📡 Read Type Detection",
@@ -435,70 +534,190 @@ async function fetchStats() {
 fetchStats();
 setInterval(fetchStats, 10000);
 
-// ─── File Selection ────────────────────────────────────────────────────────
-function handleDragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('drag-over'); }
-function handleDragLeave(e) { document.getElementById('drop-zone').classList.remove('drag-over'); }
-function handleDrop(e) {
-  e.preventDefault(); document.getElementById('drop-zone').classList.remove('drag-over');
-  const f = e.dataTransfer.files[0]; if (f) handleFileSelect(f);
-}
-function handleFileSelect(file) {
-  if (!file) return;
-  const allowed = ['.fastq','.fastq.gz','.fq','.fq.gz'];
-  if (!allowed.some(ext => file.name.toLowerCase().endsWith(ext))) {
-    alert('Only .fastq, .fastq.gz, .fq or .fq.gz files are supported.'); return;
-  }
-  selectedFile = file;
-  document.getElementById('file-name').textContent = file.name;
-  document.getElementById('file-size').textContent = `(${(file.size/1e6).toFixed(1)} MB)`;
-  document.getElementById('file-info').classList.remove('hidden');
-  document.getElementById('upload-btn').classList.remove('hidden');
-}
-function clearFile() {
-  selectedFile = null;
-  document.getElementById('file-info').classList.add('hidden');
-  document.getElementById('upload-btn').classList.add('hidden');
-  document.getElementById('file-input').value = '';
+// ─── Drag & Drop ──────────────────────────────────────────────────────────
+function onDragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('drag-over'); }
+function onDragLeave(e) { document.getElementById('drop-zone').classList.remove('drag-over'); }
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('drag-over');
+  addFiles(e.dataTransfer.files);
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────
-async function startUpload() {
-  if (!selectedFile) return;
-  const btn = document.getElementById('upload-btn');
-  btn.disabled = true; btn.textContent = '⏳ Uploading...';
-  document.getElementById('upload-progress').classList.remove('hidden');
-
+async function uploadSample(sample, index, total) {
   const formData = new FormData();
-  formData.append('file', selectedFile);
+  formData.append('file', sample.r1);
+  if (sample.r2) formData.append('file_r2', sample.r2);
   formData.append('kraken2_db', k2DbValue);
 
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/upload');
-  xhr.upload.onprogress = (e) => {
-    if (e.lengthComputable) {
-      const pct = Math.round((e.loaded/e.total)*100);
-      document.getElementById('upload-pct').textContent = pct+'%';
-      document.getElementById('upload-fill').style.width = pct+'%';
-    }
-  };
-  xhr.onload = () => {
-    if (xhr.status === 200) {
-      const data = JSON.parse(xhr.responseText);
-      currentJobId = data.job_id; startTime = Date.now();
-      showProgressCard(data.job_id);
-      pollTimer = setInterval(() => checkStatus(data.job_id), 4000);
-    } else {
-      let msg = 'Upload failed.';
-      try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
-      showError(msg);
-      btn.disabled = false; btn.textContent = '🚀 Start Analysis';
-    }
-  };
-  xhr.onerror = () => { showError('Network error. Please try again.'); btn.disabled=false; btn.textContent='🚀 Start Analysis'; };
-  xhr.send(formData);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/upload');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round((e.loaded/e.total)*100);
+        const overall = Math.round(((index + pct/100) / total) * 100);
+        document.getElementById('upload-pct').textContent = overall+'%';
+        document.getElementById('upload-fill').style.width = overall+'%';
+        document.getElementById('upload-label').textContent =
+          `Uploading ${sample.name} (${index+1}/${total})…`;
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status === 200) resolve(JSON.parse(xhr.responseText));
+      else { let msg='Upload failed.'; try{msg=JSON.parse(xhr.responseText).detail||msg;}catch{} reject(new Error(msg)); }
+    };
+    xhr.onerror = () => reject(new Error('Network error.'));
+    xhr.send(formData);
+  });
 }
 
-// ─── Polling ──────────────────────────────────────────────────────────────
+async function startAllUploads() {
+  if (!sampleQueue.length) return;
+  const btn = document.getElementById('upload-btn');
+  btn.disabled = true; btn.textContent = '⏳ Uploading…';
+  document.getElementById('upload-card').classList.add('hidden'); // hide after starting
+
+  const total = sampleQueue.length;
+  document.getElementById('upload-progress').classList.remove('hidden');
+
+  for (let i = 0; i < sampleQueue.length; i++) {
+    const sample = sampleQueue[i];
+    try {
+      const data = await uploadSample(sample, i, total);
+      spawnJobCard(data.job_id, sample.name, data.paired_end);
+    } catch(err) {
+      spawnJobCard(null, sample.name, false, err.message);
+    }
+  }
+
+  document.getElementById('upload-progress').classList.add('hidden');
+  sampleQueue = [];
+}
+
+// Legacy single-upload path (kept for resetAll)
+async function startUpload() {
+  await startAllUploads();
+}
+
+// ─── Per-job Card ─────────────────────────────────────────────────────────
+function spawnJobCard(jobId, sampleName, isPE, errorMsg) {
+  const cardId = `job-${jobId || Date.now()}`;
+  const container = document.getElementById('jobs-container');
+  const div = document.createElement('div');
+  div.id = cardId;
+  div.className = 'bg-white rounded-2xl shadow-sm border border-slate-100';
+
+  if (!jobId) {
+    div.innerHTML = `
+      <div class="px-8 py-5 flex items-center gap-4">
+        <div class="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-xl">❌</div>
+        <div>
+          <p class="font-semibold text-red-700">${sampleName}</p>
+          <p class="text-slate-500 text-sm mt-0.5">${errorMsg}</p>
+        </div>
+      </div>`;
+    container.appendChild(div);
+    return;
+  }
+
+  div.innerHTML = `
+    <div class="px-8 py-5 border-b border-slate-100 flex items-center justify-between">
+      <div>
+        <p class="font-semibold text-slate-800">${sampleName}
+          ${isPE ? '<span class="ml-2 text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full font-medium">PE</span>' : ''}
+        </p>
+        <p class="text-xs text-slate-400 mt-0.5">Job: <code class="bg-slate-100 px-1 rounded">${jobId}</code></p>
+      </div>
+      <span id="status-${jobId}" class="px-3 py-1 rounded-full text-sm font-semibold bg-amber-100 text-amber-700">Running</span>
+    </div>
+    <div class="px-8 py-5">
+      <div id="stages-${jobId}" class="space-y-1 mb-4"></div>
+      <div class="progress-bar"><div class="progress-fill" id="fill-${jobId}" style="width:5%"></div></div>
+      <p class="text-xs text-slate-400 mt-2 text-right" id="eta-${jobId}">Estimating…</p>
+      <div id="result-btns-${jobId}" class="hidden mt-4 flex gap-3">
+        <a href="/view/${jobId}" target="_blank"
+           class="py-2 px-4 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-semibold rounded-xl text-sm">
+          🔍 View Report
+        </a>
+        <a href="/report/${jobId}"
+           class="py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-sm">
+          ⬇ Download
+        </a>
+      </div>
+    </div>`;
+  container.appendChild(div);
+
+  // Start polling
+  const t0 = Date.now();
+  const timer = setInterval(() => pollJob(jobId, t0, timer), 5000);
+  activeJobs[jobId] = {sampleName, startTime: t0, pollTimer: timer};
+  pollJob(jobId, t0, timer);  // immediate first poll
+}
+
+async function pollJob(jobId, t0, timer) {
+  try {
+    const res = await fetch(`/status/${jobId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderJobStages(jobId, data.stages || {}, t0);
+    const statusEl = document.getElementById(`status-${jobId}`);
+    const map = {
+      queued:['Queued','bg-slate-100 text-slate-600'],
+      running:['Running','bg-amber-100 text-amber-700'],
+      ai_pending:['AI Analysis','bg-violet-100 text-violet-700'],
+      completed:['Completed','bg-emerald-100 text-emerald-700'],
+      failed:['Failed','bg-red-100 text-red-700'],
+    };
+    const [label,cls] = map[data.status]||['Unknown','bg-slate-100 text-slate-600'];
+    if (statusEl) { statusEl.textContent=label; statusEl.className=`px-3 py-1 rounded-full text-sm font-semibold ${cls}`; }
+    if (data.status === 'completed') {
+      clearInterval(timer);
+      const btns = document.getElementById(`result-btns-${jobId}`);
+      if (btns) btns.classList.remove('hidden');
+    } else if (data.status === 'failed') {
+      clearInterval(timer);
+      const etaEl = document.getElementById(`eta-${jobId}`);
+      if (etaEl) etaEl.textContent = `Error: ${data.error || 'Unknown error'}`;
+    }
+  } catch(e) {}
+}
+
+function renderJobStages(jobId, stages, t0) {
+  const container = document.getElementById(`stages-${jobId}`);
+  if (!container) return;
+  let done = 0;
+  const rows = STAGE_ORDER.map(key => {
+    const stage = stages[key] || {status:'pending'};
+    let dot='dot-pending', txt='Pending';
+    if (stage.status==='running')  { dot='dot-running'; txt='Running…'; }
+    else if (stage.status==='done')    { dot='dot-done'; done++;
+      const el = fmtElapsed(stage.started_at, stage.updated_at);
+      txt = el ? `Done · ${el}` : 'Done'; }
+    else if (stage.status==='failed')  { dot='dot-failed'; txt='Failed'; }
+    else if (stage.status==='skipped') { dot='dot-skipped'; txt='Skipped'; done++; }
+    return `<div class="flex items-center justify-between py-1">
+      <div class="flex items-center">
+        <span class="stage-dot ${dot}"></span>
+        <span class="text-slate-600 text-xs">${STAGE_LABELS[key]||key}</span>
+      </div>
+      <span class="text-xs text-slate-400">${txt}</span>
+    </div>`;
+  });
+  container.innerHTML = rows.join('');
+  const pct = Math.max(5, Math.round((done/STAGE_ORDER.length)*100));
+  const fill = document.getElementById(`fill-${jobId}`);
+  if (fill) fill.style.width = pct+'%';
+  const etaEl = document.getElementById(`eta-${jobId}`);
+  if (etaEl && done > 0) {
+    const elapsed = (Date.now()-t0)/1000;
+    const remain = Math.max(0,(elapsed/done)*STAGE_ORDER.length-elapsed);
+    const mins = Math.ceil(remain/60);
+    etaEl.textContent = mins>1 ? `~${mins} min remaining` : 'Almost done…';
+  }
+}
+
+// Kept for single-job results card compatibility
 async function checkStatus(jobId) {
   try {
     const res = await fetch(`/status/${jobId}`);
@@ -509,6 +728,19 @@ async function checkStatus(jobId) {
     if (data.status === 'completed') { clearInterval(pollTimer); showResults(jobId, data.stages || {}); }
     else if (data.status === 'failed') { clearInterval(pollTimer); showError(data.error || 'Unknown error.'); }
   } catch(e) { console.error('Poll:', e); }
+}
+
+// ─── Polling (legacy single-job path) ────────────────────────────────────
+async function checkStatus(jobId) {
+  try {
+    const res = await fetch(`/status/${jobId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    updateStages(data.stages || {});
+    updateOverallStatus(data.status);
+    if (data.status === 'completed') { clearInterval(pollTimer); showResults(jobId, data.stages || {}); }
+    else if (data.status === 'failed') { clearInterval(pollTimer); showError(data.error || 'Unknown error.'); }
+  } catch(e) {}
 }
 
 // ─── Stage Display ────────────────────────────────────────────────────────
@@ -733,7 +965,6 @@ function showProgressCard(jobId) {
 }
 function showError(msg) {
   document.getElementById('progress-card').classList.add('hidden');
-  document.getElementById('upload-card').classList.add('hidden');
   document.getElementById('error-card').classList.remove('hidden');
   document.getElementById('error-msg').textContent = msg;
 }

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import aiofiles
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -108,15 +109,19 @@ def _resolve_kraken2_db(raw: str) -> Path | None:
 
 
 def _run_full_pipeline(job_id: str, fastq_path: Path,
+                       fastq_r2: Path | None = None,
                        kraken2_db: Path | None = None) -> None:
-    """Runs the full pipeline + AI interpretation + primer design in a background thread."""
+    """Runs the full pipeline + AI interpretation in a background thread."""
     try:
-        logger.info("[%s] Pipeline starting: %s", job_id, fastq_path)
+        logger.info("[%s] Pipeline starting: %s%s", job_id, fastq_path,
+                    f" + {fastq_r2.name}" if fastq_r2 else "")
         out_dir = RESULTS_DIR / job_id
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Genomic pipeline
-        pipeline_results = run_pipeline(job_id, fastq_path, kraken2_db=kraken2_db)
+        pipeline_results = run_pipeline(job_id, fastq_path,
+                                        fastq_r2=fastq_r2,
+                                        kraken2_db=kraken2_db)
         if pipeline_results.get("error"):
             return
 
@@ -180,83 +185,109 @@ async def list_kraken2_databases():
     return JSONResponse({"databases": found})
 
 
+async def _save_upload(upload: UploadFile, dest: Path) -> int:
+    """Streams an uploaded file to disk; returns total bytes written."""
+    total = 0
+    first_chunk = await upload.read(8192)
+    validate_magic_bytes(first_chunk, dest.name)
+    total += len(first_chunk)
+    async with aiofiles.open(dest, "wb") as out:
+        await out.write(first_chunk)
+        while chunk := await upload.read(1 << 20):
+            total += len(chunk)
+            if total > MAX_FILE_SIZE_MB * 1024 * 1024:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds the {MAX_FILE_SIZE_MB} MB limit."
+                )
+            await out.write(chunk)
+    return total
+
+
 @app.post("/upload")
 @limiter.limit(RATE_LIMIT)
 async def upload_fastq(
     request: Request,
-    file: UploadFile = File(...),
+    file:    UploadFile = File(...),
+    file_r2: Optional[UploadFile] = File(default=None),
     kraken2_db: str = Form(default=""),
 ):
     """
-    Securely uploads a FASTQ/FASTQ.gz file and starts the analysis pipeline.
-    Optional kraken2_db form field specifies the Kraken2 database path.
+    Securely uploads FASTQ/FASTQ.gz file(s) and starts the analysis pipeline.
+    Accepts a single file (MinION / SE Illumina) or two files (R1 + R2, paired-end).
 
     Security checks:
     - Filename sanitisation
     - Magic byte validation
-    - Size limit (2 GB)
+    - Size limit (2 GB per file)
     - Concurrent job limit per IP
     """
     ip_hash = _ip_hash(request)
-
-    active = db.count_active_jobs_for_ip(ip_hash)
-    if active >= 3:
+    if db.count_active_jobs_for_ip(ip_hash) >= 3:
         raise HTTPException(
             status_code=429,
             detail="You can have at most 3 active analyses running at the same time."
         )
 
+    # Validate and generate job
     try:
         safe_name = validate_filename(file.filename or "upload.fastq.gz")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    first_chunk = await file.read(8192)
-    try:
-        validate_magic_bytes(first_chunk, safe_name)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     job_id = generate_job_id()
     up_dir = job_upload_dir(job_id)
     up_dir.mkdir(parents=True, exist_ok=True)
-    dest   = up_dir / safe_name
+    dest = up_dir / safe_name
 
-    total_bytes = len(first_chunk)
+    # Save R1
     try:
-        async with aiofiles.open(dest, "wb") as out:
-            await out.write(first_chunk)
-            while chunk := await file.read(1 << 20):
-                total_bytes += len(chunk)
-                if total_bytes > MAX_FILE_SIZE_MB * 1024 * 1024:
-                    dest.unlink(missing_ok=True)
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"File exceeds the {MAX_FILE_SIZE_MB} MB limit."
-                    )
-                await out.write(chunk)
+        total_bytes = await _save_upload(file, dest)
     except HTTPException:
         raise
     except Exception as e:
         dest.unlink(missing_ok=True)
-        logger.error("File save error: %s", e)
+        logger.error("File save error (R1): %s", e)
         raise HTTPException(status_code=500, detail="Failed to save file.")
 
-    md5 = compute_md5(dest)
+    # Save R2 (optional)
+    dest_r2: Path | None = None
+    if file_r2 and file_r2.filename:
+        try:
+            safe_name_r2 = validate_filename(file_r2.filename)
+        except ValueError as e:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=f"R2: {e}")
+        dest_r2 = up_dir / safe_name_r2
+        try:
+            r2_bytes = await _save_upload(file_r2, dest_r2)
+            total_bytes += r2_bytes
+        except HTTPException:
+            dest.unlink(missing_ok=True)
+            raise
+        except Exception as e:
+            dest.unlink(missing_ok=True)
+            dest_r2.unlink(missing_ok=True)
+            logger.error("File save error (R2): %s", e)
+            raise HTTPException(status_code=500, detail="Failed to save R2 file.")
 
+    md5 = compute_md5(dest)
     expires_at = (
         datetime.now(timezone.utc) + timedelta(hours=JOB_EXPIRY_HOURS)
     ).isoformat()
     db.create_job(job_id, safe_name, expires_at, ip_hash, md5)
 
     resolved_db = _resolve_kraken2_db(kraken2_db)
-    logger.info("New job: %s | File: %s | %d bytes | MD5: %s | Kraken2 DB: %s",
-                job_id, safe_name, total_bytes, md5,
+    logger.info("New job: %s | %s%s | %d bytes | MD5: %s | Kraken2 DB: %s",
+                job_id, safe_name,
+                f" + {dest_r2.name}" if dest_r2 else "",
+                total_bytes, md5,
                 str(resolved_db) if resolved_db else "none")
 
     t = threading.Thread(
         target=_run_full_pipeline,
-        args=(job_id, dest, resolved_db),
+        args=(job_id, dest, dest_r2, resolved_db),
         daemon=True,
         name=f"pipeline-{job_id[:8]}",
     )
@@ -265,6 +296,7 @@ async def upload_fastq(
     return JSONResponse({
         "job_id":       job_id,
         "filename":     safe_name,
+        "paired_end":   dest_r2 is not None,
         "size_mb":      round(total_bytes / 1e6, 2),
         "md5":          md5,
         "expires_at":   expires_at,

@@ -233,8 +233,9 @@ def _parse_kraken2_report(report_path: Path) -> dict[str, Any]:
 
 
 def stage_kraken2(job_id: str, fastq: Path, out_dir: Path,
-                  db_path: Path) -> dict[str, Any]:
-    """Taxonomic classification with Kraken2."""
+                  db_path: Path,
+                  fastq_r2: Path | None = None) -> dict[str, Any]:
+    """Taxonomic classification with Kraken2 (SE or PE)."""
     db.update_stage(job_id, "kraken2", "running")
     k2_dir = out_dir / "kraken2"
     k2_dir.mkdir(exist_ok=True)
@@ -249,9 +250,15 @@ def stage_kraken2(job_id: str, fastq: Path, out_dir: Path,
         "--report",  str(report_file),
         "--output",  str(output_file),
     ]
-    if str(fastq).endswith(".gz"):
-        cmd.append("--gzip-compressed")
-    cmd.append(sanitize_path(fastq))
+    if fastq_r2:
+        cmd.append("--paired")
+        if str(fastq).endswith(".gz"):
+            cmd.append("--gzip-compressed")
+        cmd += [sanitize_path(fastq), sanitize_path(fastq_r2)]
+    else:
+        if str(fastq).endswith(".gz"):
+            cmd.append("--gzip-compressed")
+        cmd.append(sanitize_path(fastq))
 
     rc, out, err = _run(cmd, k2_dir, timeout=3600)
     if rc != 0:
@@ -370,7 +377,8 @@ def _run_autocycler(assemblies: list[Path], out_dir: Path) -> Path | None:
 
 
 def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
-                   read_type: str) -> tuple[Path | None, list]:
+                   read_type: str,
+                   fastq_r2: Path | None = None) -> tuple[Path | None, list]:
     """
     Assembly stage:
     - MinION  → Flye (--nano-raw) + Flye (--nano-hq) → Autocycler consensus
@@ -411,7 +419,7 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
             db.update_stage(job_id, "assembly", "failed", "All Flye runs failed.")
             return None, []
 
-    else:  # Illumina
+    else:  # Illumina (SE or PE)
         cmd = [
             "shovill",
             "--R1", sanitize_path(fastq),
@@ -419,6 +427,8 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
             "--cpus", str(ASSEMBLY_THREADS),
             "--force",
         ]
+        if fastq_r2:
+            cmd += ["--R2", sanitize_path(fastq_r2)]
         rc, out, err = _run(cmd, asm_dir, timeout=10800, env_name="shovill")
         candidates = list(asm_dir.glob("contigs.fa")) + list(asm_dir.glob("assembly.fasta"))
         if candidates:
@@ -826,6 +836,7 @@ def stage_annotation(job_id: str, fasta: Path, out_dir: Path,
 # ─── Main Pipeline ────────────────────────────────────────────────────────────
 
 def run_pipeline(job_id: str, fastq_path: Path,
+                 fastq_r2: Path | None = None,
                  kraken2_db: Path | None = None) -> dict[str, Any]:
     """
     Runs the full pipeline. Returns a dict with all results.
@@ -840,34 +851,48 @@ def run_pipeline(job_id: str, fastq_path: Path,
     results: dict[str, Any] = {
         "job_id":      job_id,
         "sample_name": sample_name,
+        "paired_end":  fastq_r2 is not None,
     }
 
     try:
         db.update_job_status(job_id, "running")
 
-        # 1. Read type detection
+        # ── 1. Read type detection ─────────────────────────────────────────
         db.update_stage(job_id, "detect", "running")
-        read_type = detect_read_type(fastq_path)
-        db.update_stage(job_id, "detect", "done", read_type)
+        if fastq_r2 is not None:
+            # R1 + R2 provided → definitely Illumina paired-end
+            read_type = "illumina"
+            db.update_stage(job_id, "detect", "done", "illumina (paired-end, R1+R2 supplied)")
+        else:
+            read_type = detect_read_type(fastq_path)
+            db.update_stage(job_id, "detect", "done", read_type)
         db.update_job_status(job_id, "running", read_type=read_type)
         results["read_type"] = read_type
-        logger.info("[%s] Read type: %s", job_id, read_type)
+        logger.info("[%s] Read type: %s%s", job_id, read_type,
+                    " (PE)" if fastq_r2 else "")
 
-        # 2. Kraken2 (optional — runs on raw reads if DB provided)
+        # ── 2. Kraken2 ────────────────────────────────────────────────────
         if kraken2_db and kraken2_db.is_dir():
-            results["kraken2"] = stage_kraken2(job_id, fastq_path, out_dir, kraken2_db)
+            results["kraken2"] = stage_kraken2(
+                job_id, fastq_path, out_dir, kraken2_db,
+                fastq_r2=fastq_r2,
+            )
             logger.info("[%s] Kraken2 done.", job_id)
         else:
             db.update_stage(job_id, "kraken2", "skipped",
                             "No Kraken2 database specified.")
             results["kraken2"] = None
 
-        # 3. QC
-        results["qc"] = stage_qc(job_id, fastq_path, out_dir, read_type)
+        # ── 3. QC ─────────────────────────────────────────────────────────
+        results["qc"], filtered_r1, filtered_r2 = stage_qc(
+            job_id, fastq_path, out_dir, read_type, fastq_r2=fastq_r2
+        )
         logger.info("[%s] QC done.", job_id)
 
-        # 4. Assembly
-        fasta, asm_qc = stage_assembly(job_id, fastq_path, out_dir, read_type)
+        # ── 4. Assembly ───────────────────────────────────────────────────
+        fasta, asm_qc = stage_assembly(
+            job_id, filtered_r1, out_dir, read_type, fastq_r2=filtered_r2
+        )
         results["assembly_fasta"]    = str(fasta) if fasta else None
         results["assembly_qc_checks"] = asm_qc
         if not fasta:
@@ -931,8 +956,15 @@ def run_pipeline(job_id: str, fastq_path: Path,
 # ─── QC (kept here for import by stage_assembly caller) ───────────────────────
 
 def stage_qc(job_id: str, fastq: Path, out_dir: Path,
-             read_type: str) -> dict[str, Any]:
-    """QC stage: MinION → NanoPlot, Illumina → FastP"""
+             read_type: str,
+             fastq_r2: Path | None = None) -> tuple[dict[str, Any], Path, Path | None]:
+    """
+    QC stage:
+    - MinION  → NanoPlot  (returns original fastq as filtered path)
+    - Illumina SE → fastp single-end
+    - Illumina PE → fastp paired-end
+    Returns (metrics_dict, filtered_r1_path, filtered_r2_path_or_None)
+    """
     db.update_stage(job_id, "qc", "running")
     qc_dir = out_dir / "qc"
     qc_dir.mkdir(exist_ok=True)
@@ -957,21 +989,44 @@ def stage_qc(job_id: str, fastq: Path, out_dir: Path,
                     result["total_bases"] = line.split(":")[-1].strip()
                 elif "N50" in line:
                     result["n50"] = line.split(":")[-1].strip()
+        db.update_stage(job_id, "qc", "done", json.dumps(result))
+        return result, fastq, None
 
-    else:  # illumina
-        json_out = qc_dir / "fastp.json"
-        cmd = [
-            "fastp",
-            "-i", sanitize_path(fastq),
-            "-o", str(qc_dir / "filtered.fastq.gz"),
-            "--json", str(json_out),
-            "--html", str(qc_dir / "fastp.html"),
-            "--thread", str(MAX_THREADS),
-            "--detect_adapter_for_pe",
-            "-g", "-x",
-            "--length_required", "50",
-            "-q", "20",
-        ]
+    else:  # Illumina (SE or PE)
+        json_out  = qc_dir / "fastp.json"
+        filt_r1   = qc_dir / "filtered_R1.fastq.gz"
+        filt_r2   = qc_dir / "filtered_R2.fastq.gz"
+
+        if fastq_r2:   # Paired-end
+            cmd = [
+                "fastp",
+                "-i", sanitize_path(fastq),
+                "-I", sanitize_path(fastq_r2),
+                "-o", str(filt_r1),
+                "-O", str(filt_r2),
+                "--json", str(json_out),
+                "--html", str(qc_dir / "fastp.html"),
+                "--thread", str(MAX_THREADS),
+                "--detect_adapter_for_pe",
+                "-g", "-x",
+                "--length_required", "50",
+                "-q", "20",
+            ]
+        else:           # Single-end
+            filt_r1 = qc_dir / "filtered.fastq.gz"
+            filt_r2 = None
+            cmd = [
+                "fastp",
+                "-i", sanitize_path(fastq),
+                "-o", str(filt_r1),
+                "--json", str(json_out),
+                "--html", str(qc_dir / "fastp.html"),
+                "--thread", str(MAX_THREADS),
+                "-g", "-x",
+                "--length_required", "50",
+                "-q", "20",
+            ]
+
         rc, out, err = _run(cmd, qc_dir)
         if json_out.exists():
             data = json.loads(json_out.read_text())
@@ -981,7 +1036,13 @@ def stage_qc(job_id: str, fastq: Path, out_dir: Path,
                 "total_bases":      af.get("total_bases", 0),
                 "q30_rate":         round(af.get("q30_rate", 0) * 100, 1),
                 "mean_read_length": af.get("read1_mean_length", 0),
+                "paired_end":       fastq_r2 is not None,
             }
 
-    db.update_stage(job_id, "qc", "done", json.dumps(result))
-    return result
+        # Fallback: if fastp produced no output, use originals
+        if not filt_r1.exists():
+            filt_r1 = fastq
+            filt_r2 = fastq_r2
+
+        db.update_stage(job_id, "qc", "done", json.dumps(result))
+        return result, filt_r1, filt_r2 if fastq_r2 else None
