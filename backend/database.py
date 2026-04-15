@@ -74,7 +74,8 @@ def update_job_status(job_id: str, status: str,
 
 def update_stage(job_id: str, stage: str, status: str,
                  detail: str = "") -> None:
-    """Updates a pipeline stage entry."""
+    """Updates a pipeline stage entry, recording a timestamp on each change."""
+    now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
         row = conn.execute(
             "SELECT stages FROM jobs WHERE id = ?", (job_id,)
@@ -82,7 +83,13 @@ def update_stage(job_id: str, stage: str, status: str,
         if not row:
             return
         stages = json.loads(row["stages"])
-        stages[stage] = {"status": status, "detail": detail}
+        prev = stages.get(stage, {})
+        stages[stage] = {
+            "status":     status,
+            "detail":     detail,
+            "started_at": prev.get("started_at", now) if status == "running" else prev.get("started_at"),
+            "updated_at": now,
+        }
         conn.execute(
             "UPDATE jobs SET stages = ? WHERE id = ?",
             (json.dumps(stages), job_id)

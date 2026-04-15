@@ -101,6 +101,97 @@ def _assembly_qc_section(qc_checks: list[dict]) -> str:
            + "\n".join(cards) + "</div>"
 
 
+def _mobsuite_section(mob: dict) -> str:
+    """Renders MOB-Suite plasmid detection results."""
+    if not mob:
+        return "<p style='color:#6b7280'>MOB-Suite was not run.</p>"
+    if mob.get("error") and not mob.get("plasmids"):
+        return f"<p style='color:#ef4444'>MOB-Suite error: {mob['error']}</p>"
+
+    plasmids = mob.get("plasmids", [])
+    if not plasmids:
+        return "<p style='color:#22c55e'>&#x2705; No plasmids detected — likely a purely chromosomal isolate.</p>"
+
+    rows = [
+        "<table><thead><tr>"
+        "<th>Plasmid ID</th><th>Replicon(s)</th><th>Mobility</th><th>MPF Type</th>"
+        "<th>Contigs</th><th>Size</th>"
+        "</tr></thead><tbody>"
+    ]
+    for p in plasmids:
+        size = p.get("size_bp", 0)
+        if size >= 1_000_000:
+            size_str = f"{size/1_000_000:.2f} Mb"
+        elif size >= 1_000:
+            size_str = f"{size/1_000:.1f} kb"
+        else:
+            size_str = str(size) + " bp" if size else "—"
+        rows.append(
+            f"<tr>"
+            f"<td><code>{p.get('id','—')}</code></td>"
+            f"<td>{p.get('replicons','—')}</td>"
+            f"<td>{p.get('mobility','—')}</td>"
+            f"<td>{p.get('mpf','—')}</td>"
+            f"<td>{p.get('contigs','—')}</td>"
+            f"<td>{size_str}</td>"
+            f"</tr>"
+        )
+    rows.append("</tbody></table>")
+    return "\n".join(rows)
+
+
+def _abricate_section(abricate: dict) -> str:
+    """Renders Abricate (CARD + VFDB) results as a table."""
+    if not abricate:
+        return "<p style='color:#6b7280'>Abricate was not run.</p>"
+
+    genes = abricate.get("genes", [])
+    ran_vfdb  = abricate.get("ran_vfdb", False)
+    top_genus = abricate.get("top_genus", "")
+
+    vfdb_note = (
+        f"<p style='margin-bottom:.8rem;font-size:.85rem;color:#6b7280'>"
+        f"VFDB also searched (detected genus: <em>{top_genus}</em>).</p>"
+        if ran_vfdb else
+        f"<p style='margin-bottom:.8rem;font-size:.85rem;color:#6b7280'>"
+        f"CARD database searched. VFDB skipped (genus not in VFDB or Kraken2 not run).</p>"
+    )
+
+    if not genes:
+        return vfdb_note + "<p style='color:#22c55e'>&#x2705; No hits found in searched databases.</p>"
+
+    # Group by database
+    by_db: dict[str, list] = {}
+    for g in genes:
+        by_db.setdefault(g["database"], []).append(g)
+
+    sections = [vfdb_note]
+    for db_name, hits in by_db.items():
+        db_color = "#1e40af" if db_name == "CARD" else "#7c3aed"
+        sections.append(
+            f"<h4 style='margin:.6rem 0 .4rem;color:{db_color}'>"
+            f"{db_name} &mdash; {len(hits)} hit{'s' if len(hits)!=1 else ''}</h4>"
+        )
+        rows = ["<table><thead><tr>"
+                "<th>Gene</th><th>Product</th><th>% Coverage</th>"
+                "<th>% Identity</th><th>Resistance</th>"
+                "</tr></thead><tbody>"]
+        for g in hits:
+            rows.append(
+                f"<tr>"
+                f"<td><strong>{g.get('gene','')}</strong></td>"
+                f"<td style='font-size:.82rem'>{g.get('product','')}</td>"
+                f"<td>{g.get('coverage','')}</td>"
+                f"<td>{g.get('identity','')}</td>"
+                f"<td style='font-size:.8rem;color:#7c3aed'>{g.get('resistance','')}</td>"
+                f"</tr>"
+            )
+        rows.append("</tbody></table>")
+        sections.append("\n".join(rows))
+
+    return "\n".join(sections)
+
+
 def _amr_table(genes: list[dict]) -> str:
     if not genes:
         return "<p style='color:#22c55e'>&#x2705; No AMR genes detected.</p>"
@@ -133,6 +224,8 @@ def generate_html_report(job_id: str,
     qc          = pipeline_results.get("qc", {})
     mlst        = pipeline_results.get("mlst", {})
     amr         = pipeline_results.get("amr", {})
+    abricate    = pipeline_results.get("abricate") or {}
+    mobsuite    = pipeline_results.get("mobsuite") or {}
     kraken2     = pipeline_results.get("kraken2") or {}
 
     risk        = ai_results.get("risk_level", "UNKNOWN").upper()
@@ -290,6 +383,22 @@ def generate_html_report(job_id: str,
     <div class="section-title">&#x1F48A; Antimicrobial Resistance Genes ({amr.get('count',0)} genes)</div>
     <div class="section-body">
       {_amr_table(amr.get('genes', []))}
+    </div>
+  </div>
+
+  <!-- Abricate -->
+  <div class="section">
+    <div class="section-title">&#x1F9AB; Virulence &amp; Resistance Screen (Abricate)</div>
+    <div class="section-body">
+      {_abricate_section(abricate)}
+    </div>
+  </div>
+
+  <!-- MOB-Suite -->
+  <div class="section">
+    <div class="section-title">&#x1F48A; Mobile Genetic Elements (MOB-Suite)</div>
+    <div class="section-body">
+      {_mobsuite_section(mobsuite)}
     </div>
   </div>
 

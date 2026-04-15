@@ -514,6 +514,214 @@ def stage_amr(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
     return result
 
 
+# ─── Abricate ─────────────────────────────────────────────────────────────────
+
+VFDB_SEQUENCES = Path("/home/analysis/miniconda3/envs/analiz/db/vfdb/sequences")
+
+_VFDB_GENERA_CACHE: set[str] | None = None
+
+
+def _vfdb_genera() -> set[str]:
+    """Lazily loads the set of genera present in the VFDB sequences file."""
+    global _VFDB_GENERA_CACHE
+    if _VFDB_GENERA_CACHE is not None:
+        return _VFDB_GENERA_CACHE
+    genera: set[str] = set()
+    if VFDB_SEQUENCES.exists():
+        import re
+        # Header format: >vfdb~~~ACC~~~ACC (product) [Genus species str. ...]
+        pattern = re.compile(r'\[([A-Z][a-z]+)\s+\w+')
+        for line in VFDB_SEQUENCES.read_text(errors="ignore").splitlines():
+            if line.startswith(">"):
+                m = pattern.search(line)
+                if m:
+                    genera.add(m.group(1))
+    _VFDB_GENERA_CACHE = genera
+    logger.info("VFDB genera loaded: %d genera", len(genera))
+    return genera
+
+
+def _genus_in_vfdb(genus: str) -> bool:
+    """Returns True if the given genus has entries in the VFDB database."""
+    if not genus:
+        return False
+    return genus.strip().capitalize() in _vfdb_genera()
+
+
+def _parse_abricate_tsv(tsv_path: Path, db_name: str) -> list[dict]:
+    """Parses an Abricate TSV output file, returns list of hit dicts."""
+    if not tsv_path.exists():
+        return []
+    genes = []
+    for line in tsv_path.read_text().splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 15:
+            continue
+        genes.append({
+            "gene":       parts[5],
+            "coverage":   parts[9],
+            "identity":   parts[10],
+            "database":   db_name,
+            "accession":  parts[12],
+            "product":    parts[13],
+            "resistance": parts[14] if len(parts) > 14 else "",
+        })
+    return genes
+
+
+def stage_abricate(job_id: str, fasta: Path, out_dir: Path,
+                   kraken2_results: dict | None) -> dict:
+    """
+    Runs Abricate on the assembly:
+    - Always: --db card (AMR/resistance genes)
+    - Conditionally: --db vfdb (if top Kraken2 genus is in VFDB)
+    """
+    db.update_stage(job_id, "abricate", "running",
+                    f"Running abricate --db card on {fasta.name}")
+    abr_dir = out_dir / "abricate"
+    abr_dir.mkdir(exist_ok=True)
+
+    all_genes: list[dict] = []
+
+    # Always run CARD
+    card_tsv = abr_dir / "card.tsv"
+    cmd_card = ["abricate", "--db", "card", "--quiet", sanitize_path(fasta)]
+    rc, out_c, err_c = _run(cmd_card, abr_dir, timeout=600, env_name="analiz")
+    if rc == 0:
+        card_tsv.write_text(out_c)
+        card_hits = _parse_abricate_tsv(card_tsv, "CARD")
+        all_genes.extend(card_hits)
+        logger.info("[%s] Abricate CARD: %d hits", job_id, len(card_hits))
+    else:
+        logger.warning("[%s] Abricate CARD failed: %s", job_id, err_c[:200])
+
+    # Conditionally run VFDB
+    run_vfdb = False
+    top_genus = ""
+    if kraken2_results and kraken2_results.get("top_taxa"):
+        top_name = kraken2_results["top_taxa"][0].get("name", "")
+        top_genus = top_name.split()[0] if top_name else ""
+        run_vfdb = _genus_in_vfdb(top_genus)
+        if run_vfdb:
+            logger.info("[%s] %s is in VFDB — running abricate --db vfdb", job_id, top_genus)
+
+    if run_vfdb:
+        db.update_stage(job_id, "abricate", "running",
+                        f"Running abricate --db vfdb (genus: {top_genus})")
+        vfdb_tsv = abr_dir / "vfdb.tsv"
+        cmd_vfdb = ["abricate", "--db", "vfdb", "--quiet", sanitize_path(fasta)]
+        rc, out_v, err_v = _run(cmd_vfdb, abr_dir, timeout=600, env_name="analiz")
+        if rc == 0:
+            vfdb_tsv.write_text(out_v)
+            vfdb_hits = _parse_abricate_tsv(vfdb_tsv, "VFDB")
+            all_genes.extend(vfdb_hits)
+            logger.info("[%s] Abricate VFDB: %d hits", job_id, len(vfdb_hits))
+        else:
+            logger.warning("[%s] Abricate VFDB failed: %s", job_id, err_v[:200])
+
+    result = {
+        "genes":      all_genes,
+        "count":      len(all_genes),
+        "ran_vfdb":   run_vfdb,
+        "top_genus":  top_genus,
+    }
+    db.update_stage(job_id, "abricate", "done",
+                    json.dumps({"count": len(all_genes), "ran_vfdb": run_vfdb,
+                                "top_genus": top_genus}))
+    return result
+
+
+# ─── MOB-Suite (Plasmid typing) ───────────────────────────────────────────────
+
+def stage_mobsuite(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
+    """
+    Runs MOB-Recon to classify contigs as chromosome or plasmid.
+    Returns summary: plasmid count, replicon types, mobility.
+    """
+    db.update_stage(job_id, "mobsuite", "running",
+                    f"Running mob_recon on {fasta.name}")
+    mob_dir = out_dir / "mobsuite"
+    mob_dir.mkdir(exist_ok=True)
+
+    cmd = [
+        "mob_recon",
+        "-i", sanitize_path(fasta),
+        "-o", str(mob_dir),
+        "-n", str(MAX_THREADS),
+        "--force",
+    ]
+    rc, out_s, err_s = _run(cmd, mob_dir, timeout=3600, env_name="mobsuite")
+
+    result: dict[str, Any] = {"plasmids": [], "plasmid_count": 0, "error": None}
+
+    if rc != 0:
+        logger.warning("[%s] mob_recon exited %d: %s", job_id, rc, err_s[:200])
+        result["error"] = err_s[:300]
+        db.update_stage(job_id, "mobsuite", "done", json.dumps(result))
+        return result
+
+    # Parse contig_report.txt
+    contig_report = mob_dir / "contig_report.txt"
+    mobtyper = mob_dir / "mobtyper_results.txt"
+
+    plasmid_contigs: dict[str, dict] = {}  # plasmid_id -> info
+
+    if contig_report.exists():
+        lines = contig_report.read_text().splitlines()
+        if lines:
+            headers = lines[0].split("\t")
+            for line in lines[1:]:
+                parts = line.split("\t")
+                if len(parts) < len(headers):
+                    continue
+                row = dict(zip(headers, parts))
+                element_type = row.get("molecule_type", "").lower()
+                if "plasmid" in element_type:
+                    pid = row.get("primary_cluster_id", row.get("plasmid_id", "unknown"))
+                    if pid and pid not in plasmid_contigs:
+                        plasmid_contigs[pid] = {
+                            "id":         pid,
+                            "replicons":  row.get("rep_type(s)", "—"),
+                            "mobility":   row.get("predicted_mobility", "—"),
+                            "mpf":        row.get("mpf_type", "—"),
+                            "contigs":    0,
+                            "size_bp":    0,
+                        }
+                    if pid in plasmid_contigs:
+                        plasmid_contigs[pid]["contigs"] += 1
+                        try:
+                            plasmid_contigs[pid]["size_bp"] += int(row.get("contig_length", 0))
+                        except (ValueError, TypeError):
+                            pass
+
+    # Override with mobtyper data if available
+    if mobtyper.exists():
+        lines = mobtyper.read_text().splitlines()
+        if len(lines) > 1:
+            headers = lines[0].split("\t")
+            for line in lines[1:]:
+                parts = line.split("\t")
+                if len(parts) < len(headers):
+                    continue
+                row = dict(zip(headers, parts))
+                pid = row.get("primary_cluster_id", row.get("id", "unknown"))
+                if pid in plasmid_contigs:
+                    plasmid_contigs[pid]["replicons"] = row.get("rep_type(s)", plasmid_contigs[pid]["replicons"])
+                    plasmid_contigs[pid]["mobility"]  = row.get("predicted_mobility", plasmid_contigs[pid]["mobility"])
+
+    plasmid_list = sorted(plasmid_contigs.values(), key=lambda x: -x.get("size_bp", 0))
+    result["plasmids"]      = plasmid_list
+    result["plasmid_count"] = len(plasmid_list)
+
+    summary = {"plasmid_count": len(plasmid_list),
+               "error": result["error"]}
+    db.update_stage(job_id, "mobsuite", "done", json.dumps(summary))
+    logger.info("[%s] MOB-Suite: %d plasmid(s) detected.", job_id, len(plasmid_list))
+    return result
+
+
 # ─── Annotation ───────────────────────────────────────────────────────────────
 
 def stage_annotation(job_id: str, fasta: Path, out_dir: Path,
@@ -602,7 +810,26 @@ def run_pipeline(job_id: str, fastq_path: Path,
         results["amr"] = stage_amr(job_id, fasta, out_dir)
         logger.info("[%s] AMR: %d genes found.", job_id, results["amr"].get("count", 0))
 
-        # 7. Annotation (optional — continue even if it fails)
+        # 7. Abricate (CARD always; VFDB if Kraken2 top genus is in VFDB)
+        try:
+            results["abricate"] = stage_abricate(
+                job_id, fasta, out_dir, results.get("kraken2")
+            )
+            logger.info("[%s] Abricate: %d hits.", job_id, results["abricate"].get("count", 0))
+        except Exception as abr_err:
+            logger.warning("[%s] Abricate skipped: %s", job_id, abr_err)
+            results["abricate"] = {"genes": [], "count": 0, "ran_vfdb": False, "top_genus": ""}
+
+        # 8. MOB-Suite (plasmid detection — optional)
+        try:
+            results["mobsuite"] = stage_mobsuite(job_id, fasta, out_dir)
+            logger.info("[%s] MOB-Suite: %d plasmid(s).", job_id,
+                        results["mobsuite"].get("plasmid_count", 0))
+        except Exception as mob_err:
+            logger.warning("[%s] MOB-Suite skipped: %s", job_id, mob_err)
+            results["mobsuite"] = {"plasmids": [], "plasmid_count": 0, "error": str(mob_err)}
+
+        # 9. Annotation (optional — continue even if it fails)
         try:
             results["annotation"] = str(
                 stage_annotation(job_id, fasta, out_dir, sample_name)

@@ -230,7 +230,7 @@
       </div>
 
       <!-- MLST + AMR -->
-      <div class="px-8 pt-5 pb-6 grid grid-cols-1 sm:grid-cols-2 gap-6">
+      <div class="px-8 pt-5 pb-2 grid grid-cols-1 sm:grid-cols-2 gap-6">
         <div>
           <div class="section-header">🔬 MLST Typing</div>
           <div class="metric-card">
@@ -248,11 +248,27 @@
           </div>
         </div>
         <div>
-          <div class="section-header">💊 Antimicrobial Resistance</div>
+          <div class="section-header">💊 AMRFinderPlus</div>
           <div class="metric-card">
             <div class="metric-label">Detected Genes</div>
             <div id="amr-pills" class="mt-2"></div>
           </div>
+        </div>
+      </div>
+
+      <!-- Abricate -->
+      <div id="abricate-section" class="px-8 pt-4 pb-2">
+        <div class="section-header">🧫 Virulence & Resistance Screen (Abricate)</div>
+        <div id="abricate-content" class="metric-card text-sm text-slate-500">
+          Abricate results not available.
+        </div>
+      </div>
+
+      <!-- MOB-Suite -->
+      <div id="mobsuite-section" class="px-8 pt-4 pb-6">
+        <div class="section-header">🔵 Mobile Genetic Elements (MOB-Suite)</div>
+        <div id="mobsuite-content" class="metric-card text-sm text-slate-500">
+          MOB-Suite results not available.
         </div>
       </div>
     </div>
@@ -316,6 +332,8 @@ const STAGE_LABELS = {
   assembly:   "🔧 Genome Assembly (Flye + Autocycler)",
   mlst:       "🔬 MLST Typing",
   amr:        "💊 AMR Gene Detection",
+  abricate:   "🧫 Virulence & Resistance Screen (Abricate)",
+  mobsuite:   "🔵 Mobile Genetic Elements (MOB-Suite)",
   annotation: "📝 Annotation (Bakta)",
   ai:         "🤖 AI Clinical Interpretation",
   report:     "📄 Report Generation",
@@ -478,22 +496,73 @@ async function checkStatus(jobId) {
 }
 
 // ─── Stage Display ────────────────────────────────────────────────────────
+let expandedStages = new Set();   // which stages have their detail panel open
+
+function fmtElapsed(startedAt, updatedAt) {
+  if (!startedAt || !updatedAt) return '';
+  const s = Math.round((new Date(updatedAt) - new Date(startedAt)) / 1000);
+  if (s < 1)  return '';
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s/60)}m ${s%60}s`;
+}
+
+function toggleStageDetail(key) {
+  if (expandedStages.has(key)) expandedStages.delete(key);
+  else expandedStages.add(key);
+  // re-render with current cached stages
+  if (window._lastStages) updateStages(window._lastStages);
+}
+
 function updateStages(stages) {
+  window._lastStages = stages;
   const container = document.getElementById('stages-list');
   let doneCount = 0;
   const rows = STAGE_ORDER.map(key => {
     const stage = stages[key] || {status:'pending'};
     let dotClass='dot-pending', statusText='Pending';
-    if (stage.status==='running')  { dotClass='dot-running'; statusText='Running...'; }
-    else if (stage.status==='done')    { dotClass='dot-done'; statusText='Done'; doneCount++; }
+    if (stage.status==='running')  { dotClass='dot-running'; statusText='Running…'; }
+    else if (stage.status==='done')    { dotClass='dot-done'; doneCount++;
+      const elapsed = fmtElapsed(stage.started_at, stage.updated_at);
+      statusText = elapsed ? `Done · ${elapsed}` : 'Done'; }
     else if (stage.status==='failed')  { dotClass='dot-failed'; statusText='Failed'; }
     else if (stage.status==='skipped') { dotClass='dot-skipped'; statusText='Skipped'; doneCount++; }
-    return `<div class="flex items-center justify-between py-1.5">
-      <div class="flex items-center">
-        <span class="stage-dot ${dotClass}"></span>
-        <span class="text-slate-700 text-sm">${STAGE_LABELS[key]||key}</span>
+
+    const hasDetail = stage.detail && String(stage.detail).trim().length > 0 && stage.status !== 'pending';
+    const isExpanded = expandedStages.has(key);
+    const detailRaw = String(stage.detail || '');
+    // Try to pretty-print JSON detail
+    let detailHtml = '';
+    if (hasDetail) {
+      let parsed = null;
+      try { parsed = JSON.parse(detailRaw); } catch {}
+      if (parsed && typeof parsed === 'object') {
+        detailHtml = JSON.stringify(parsed, null, 2);
+      } else {
+        detailHtml = detailRaw;
+      }
+    }
+    const toggleBtn = hasDetail
+      ? `<button onclick="toggleStageDetail('${key}')"
+                 class="text-xs text-indigo-400 hover:text-indigo-600 ml-2 underline">
+           ${isExpanded ? 'hide' : 'details'}
+         </button>`
+      : '';
+    const detailPanel = hasDetail && isExpanded
+      ? `<div class="mt-1 ml-5 p-2 bg-slate-50 border border-slate-200 rounded-lg
+                     text-xs text-slate-600 font-mono whitespace-pre-wrap break-all
+                     max-h-40 overflow-y-auto">${detailHtml}</div>`
+      : '';
+
+    return `<div class="py-1.5">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center">
+          <span class="stage-dot ${dotClass}"></span>
+          <span class="text-slate-700 text-sm">${STAGE_LABELS[key]||key}</span>
+          ${toggleBtn}
+        </div>
+        <span class="text-xs text-slate-400">${statusText}</span>
       </div>
-      <span class="text-xs text-slate-400">${statusText}</span>
+      ${detailPanel}
     </div>`;
   });
   container.innerHTML = rows.join('');
@@ -504,7 +573,7 @@ function updateStages(stages) {
     const remain = Math.max(0,(elapsed/doneCount)*STAGE_ORDER.length-elapsed);
     const mins = Math.ceil(remain/60);
     document.getElementById('eta-text').textContent =
-      mins>1 ? `Estimated time remaining: ~${mins} min` : 'Almost done...';
+      mins>1 ? `Estimated time remaining: ~${mins} min` : 'Almost done…';
   }
 }
 function updateOverallStatus(status) {
@@ -595,6 +664,37 @@ function showResults(jobId, stages) {
   document.getElementById('amr-pills').innerHTML = genes.length===0
     ? '<span class="amr-pill none">✅ No AMR genes detected</span>'
     : genes.map(g=>`<span class="amr-pill" title="${g.class} · ${g.identity}% identity">${g.gene}</span>`).join('');
+
+  // Abricate
+  const abrData = tryJSON(stages.abricate?.detail) || {};
+  const abrCount = abrData.count ?? 0;
+  const abrVfdb  = abrData.ran_vfdb;
+  const abrGenus = abrData.top_genus || '';
+  let abrHtml = '';
+  if (abrCount === 0) {
+    abrHtml = `<p class="text-emerald-600 font-medium">✅ No hits found in CARD${abrVfdb?' or VFDB':''}.</p>`;
+  } else {
+    abrHtml = `<p class="font-semibold text-slate-700 mb-1">${abrCount} hit(s) found</p>`;
+  }
+  if (abrVfdb && abrGenus)
+    abrHtml += `<p class="text-xs text-slate-500 mt-1">VFDB also searched — detected genus: <em>${abrGenus}</em></p>`;
+  else
+    abrHtml += `<p class="text-xs text-slate-500 mt-1">CARD searched. VFDB skipped (genus not in VFDB or Kraken2 not run).</p>`;
+  document.getElementById('abricate-content').innerHTML = abrHtml;
+
+  // MOB-Suite
+  const mobData = stages.mobsuite?.detail ? tryJSON(stages.mobsuite.detail) : null;
+  if (mobData !== null) {
+    const pc = mobData.plasmid_count ?? 0;
+    let mobHtml = '';
+    if (pc === 0) {
+      mobHtml = '<p class="text-emerald-600 font-medium">✅ No plasmids detected — chromosomal isolate.</p>';
+    } else {
+      mobHtml = `<p class="font-semibold text-slate-700">${pc} plasmid(s) detected — see full report for details.</p>`;
+    }
+    if (mobData.error) mobHtml += `<p class="text-xs text-red-500 mt-1">Warning: ${mobData.error}</p>`;
+    document.getElementById('mobsuite-content').innerHTML = mobHtml;
+  }
 
   document.getElementById('results-card').classList.remove('hidden');
 }
