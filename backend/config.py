@@ -36,8 +36,11 @@ GZIP_MAGIC = b"\x1f\x8b"
 # === Job Lifecycle ===
 JOB_EXPIRY_HOURS = 24   # Files auto-deleted after 24 hours
 
-# === Conda Environments (validated against this machine) ===
-CONDA_BASE = Path("/home/analysis/miniconda3")
+# === Conda Environments ===
+# Override CONDA_BASE to point to your conda/micromamba installation.
+# Docker default: /opt/conda   |   Local default: /home/analysis/miniconda3
+CONDA_BASE = Path(os.getenv("CONDA_BASE", "/home/analysis/miniconda3"))
+
 CONDA_ENVS = {
     "qc":       "analiz",    # NanoPlot, Flye
     "assembly": "shovill",   # Shovill, SPAdes
@@ -58,20 +61,31 @@ TOOLS = {
     "primer3":   "/usr/bin/primer3_core",
 }
 
-# === Autocycler ===
-AUTOCYCLER_BIN = Path("/home/analysis/Autocycler/target/release/autocycler")
-BANDAGE_BIN    = Path("/home/analysis/Desktop/Bandage")
+# === Standalone Binaries ===
+# Can be overridden with environment variables for Docker deployments.
+AUTOCYCLER_BIN = Path(os.getenv("AUTOCYCLER_BIN",
+                                "/home/analysis/Autocycler/target/release/autocycler"))
+BANDAGE_BIN    = Path(os.getenv("BANDAGE_BIN",
+                                "/home/analysis/Desktop/Bandage"))
 
 # === Quality Assessment Tools ===
-CHECKM2_DB     = Path("/home/analysis/databases_all/bact_databases_ALL/checkm2_v2_20210323/uniref100.KO.1.dmnd")
-CHECKV_DB      = Path("/home/analysis/databases_all/checkv_db")   # set if downloaded
+# Override via env vars when databases are in non-standard locations (e.g. Docker volumes).
+CHECKM2_DB = Path(os.getenv(
+    "CHECKM2_DB",
+    "/home/analysis/databases_all/bact_databases_ALL/checkm2_v2_20210323/uniref100.KO.1.dmnd"
+))
+CHECKV_DB  = Path(os.getenv("CHECKV_DB",
+                             "/home/analysis/databases_all/checkv_db"))
 
 # Thresholds for genomic context decision (from Kraken2 results)
 VIRAL_DOMINANT_THRESHOLD = 50.0   # % viral reads → skip bacterial steps
 HUMAN_DOMINANT_THRESHOLD = 40.0   # % human reads → warn + skip bacterial steps
 
 # === Kraken2 ===
-KRAKEN2_DEFAULT_DB = Path("/home/analysis/databases_all/kraken2_db")
+KRAKEN2_DEFAULT_DB = Path(os.getenv(
+    "KRAKEN2_DEFAULT_DB",
+    "/home/analysis/databases_all/kraken2_db"
+))
 
 # === Assembly QC Thresholds ===
 ASSEMBLY_QC = {

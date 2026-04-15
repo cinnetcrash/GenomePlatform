@@ -1,14 +1,21 @@
-version: "3.9"
-
 # ─────────────────────────────────────────────────────────────────────────────
-# GenomePlatform — Docker Compose
+# LycianWay — Docker Compose
 #
-# Kullanım:
-#   1. .env dosyası oluştur:  cp .env.example .env  →  API anahtarını gir
-#   2. İlk build:             docker compose build
-#   3. Başlat:                docker compose up -d
-#   4. Logları izle:          docker compose logs -f
-#   5. Durdur:                docker compose down
+# Quick start:
+#   1. cp .env.example .env        # fill in ANTHROPIC_API_KEY + DATABASES_DIR
+#   2. docker compose build        # ~30-60 min first time (conda envs)
+#   3. docker compose up -d        # start in background
+#   4. docker compose logs -f      # stream logs
+#   5. docker compose down         # stop
+#
+# Database volumes:
+#   Set DATABASES_DIR in .env to the directory containing your databases.
+#   Expected subdirectory layout:
+#     $DATABASES_DIR/
+#       kraken2_db/           → hash.k2d (Kraken2)
+#       bact_databases_ALL/checkm2_v2_20210323/uniref100.KO.1.dmnd  (CheckM2)
+#       checkv_db/            → genome_db.faa.dmnd (CheckV, optional)
+#       database_pharokka/    → PHROG_phrogs_profile_db (optional)
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -16,45 +23,61 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    image: lycianway:latest
     container_name: genome-platform
     restart: unless-stopped
 
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:8000"
 
     environment:
+      # ── Required ───────────────────────────────────────────────────────────
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+      # ── Container-internal tool paths (do not change) ──────────────────────
+      - CONDA_BASE=/opt/conda
+      - BANDAGE_BIN=/opt/conda/envs/analiz/bin/Bandage
+      - AUTOCYCLER_BIN=/usr/local/bin/autocycler
+
+      # ── Database paths inside the container (relative to /databases mount) ─
+      - KRAKEN2_DEFAULT_DB=/databases/kraken2_db
+      - CHECKM2_DB=/databases/bact_databases_ALL/checkm2_v2_20210323/uniref100.KO.1.dmnd
+      - CHECKV_DB=/databases/checkv_db
+
+      # ── Python / app ───────────────────────────────────────────────────────
       - PYTHONUNBUFFERED=1
 
     volumes:
-      # Kalıcı veri depolama (container yeniden başlasa da veri korunur)
+      # ── Databases (host → container, read-only) ────────────────────────────
+      # Point DATABASES_DIR in .env to your databases root directory.
+      - ${DATABASES_DIR:-/home/analysis/databases_all}:/databases:ro
+
+      # ── Persistent job data (Docker-managed named volumes) ─────────────────
       - genome_uploads:/app/data/uploads
       - genome_results:/app/data/results
       - genome_logs:/app/data/logs
-      - genome_db:/app/data
 
-      # Geliştirme modunda: kaynak kodu mount et (hot reload için)
-      # Prodüksiyon'da bu satırları yorum satırına al:
-      - ./backend:/app/backend:ro
-      - ./frontend:/app/frontend:ro
+      # ── Development: hot-reload source code (comment out for production) ───
+      # - ./backend:/app/backend:ro
+      # - ./frontend:/app/frontend:ro
 
-    # Kaynak limitleri (sunucu ortamına göre ayarla)
+    # ── Resource limits (adjust to your server) ────────────────────────────────
     deploy:
       resources:
         limits:
-          cpus: "16"
-          memory: 32G
+          cpus: "${CPU_LIMIT:-16}"
+          memory: "${MEM_LIMIT:-32G}"
         reservations:
           cpus: "2"
           memory: 4G
 
-    # Güvenlik: gereksiz Linux yeteneklerini kaldır
+    # ── Security hardening ─────────────────────────────────────────────────────
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     cap_add:
-      - SETUID    # fastp / subprocess için gerekli
+      - SETUID   # required for subprocess execution
       - SETGID
 
     healthcheck:
@@ -62,7 +85,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
 
     logging:
       driver: "json-file"
@@ -70,8 +93,12 @@ services:
         max-size: "50m"
         max-file: "5"
 
+
+# ── Named volumes ──────────────────────────────────────────────────────────────
 volumes:
   genome_uploads:
+    driver: local
   genome_results:
+    driver: local
   genome_logs:
-  genome_db:
+    driver: local

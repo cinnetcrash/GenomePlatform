@@ -51,7 +51,7 @@ DATABASES = [
     ("CheckV DB",                CHECKV_DB,             "genome_db.faa.dmnd",  False),
     ("Bakta DB",                 CONDA_BASE / "envs" / "bakta" / "db",
                                                         "db.db",               False),
-    ("VFDB sequences",           Path("/home/analysis/miniconda3/envs/analiz/db/vfdb"),
+    ("VFDB sequences",           CONDA_BASE / "envs" / "analiz" / "db" / "vfdb",
                                                         "sequences",           False),
     ("Pharokka DB",              Path("/home/analysis/databases_all/database_pharokka"),
                                                         "PHROG_phrogs_profile_db",  False),

@@ -191,6 +191,7 @@ async def list_kraken2_databases():
     search_roots = [
         Path("/home/analysis/databases_all"),
         Path("/home/analysis/databases"),
+        Path("/databases"),        # Docker volume mount point
         Path("/data/kraken2"),
         Path("/opt/databases"),
     ]
