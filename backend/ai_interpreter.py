@@ -53,13 +53,6 @@ Review the following genomic analysis results and provide a comprehensive clinic
   "resistance_profile": "Summary of resistance profile",
   "treatment_implications": "Treatment options and recommendations",
   "epidemiology": "Epidemiological significance (lineage, clonal complex, etc.)",
-  "pcr_targets": [
-    {{
-      "gene": "Target gene name",
-      "rationale": "Why this gene is recommended for PCR",
-      "clinical_use": "Clinical/epidemiological application of this PCR"
-    }}
-  ],
   "risk_level": "LOW | MEDIUM | HIGH | CRITICAL",
   "summary": "Overall summary (English, publication-ready language)"
 }}
@@ -82,7 +75,6 @@ def interpret(results: dict[str, Any]) -> dict[str, Any]:
             "resistance_profile": "",
             "treatment_implications": "",
             "epidemiology": "",
-            "pcr_targets": [],
             "risk_level": "UNKNOWN",
             "summary": "AI interpretation service is disabled.",
         }
@@ -111,12 +103,8 @@ def interpret(results: dict[str, Any]) -> dict[str, Any]:
 
     except json.JSONDecodeError as e:
         logger.error("Failed to parse AI response as JSON: %s", e)
-        return {"summary": raw, "risk_level": "UNKNOWN", "pcr_targets": []}
+        return {"summary": raw, "risk_level": "UNKNOWN"}
 
     except anthropic.APIError as e:
         logger.error("Claude API error: %s", e)
-        return {
-            "summary": f"API error: {e}",
-            "risk_level": "UNKNOWN",
-            "pcr_targets": [],
-        }
+        return {"summary": f"API error: {e}", "risk_level": "UNKNOWN"}

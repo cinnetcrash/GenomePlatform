@@ -28,7 +28,6 @@ from config import (
     RATE_LIMIT, RESULTS_DIR, UPLOAD_DIR,
 )
 from pipeline import run_pipeline
-from primer_designer import design_all_primers
 from report_generator import generate_html_report, save_report
 from security import (
     compute_md5, generate_job_id, job_upload_dir,
@@ -126,34 +125,9 @@ def _run_full_pipeline(job_id: str, fastq_path: Path,
         ai_results = interpret(pipeline_results)
         db.update_stage(job_id, "ai", "done")
 
-        # 3. Primer design — skipped if assembly failed or no AMR/AI targets found
-        assembly_fasta = pipeline_results.get("assembly_fasta")
-        fasta_path = Path(assembly_fasta) if assembly_fasta else None
-        amr_count  = pipeline_results.get("amr", {}).get("count", 0)
-        ai_targets = ai_results.get("pcr_targets", [])
-        has_targets = amr_count > 0 or len(ai_targets) > 0
-        assembly_ok = fasta_path and fasta_path.exists()
-
-        if not assembly_ok:
-            db.update_stage(job_id, "primers", "skipped",
-                            "Assembly did not produce a FASTA — primer design skipped.")
-            primer_results = []
-        elif not has_targets:
-            db.update_stage(job_id, "primers", "skipped",
-                            "No AMR genes or AI PCR targets found — primer design skipped.")
-            primer_results = []
-        else:
-            db.update_stage(job_id, "primers", "running")
-            primer_results = design_all_primers(
-                pipeline_results.get("amr", {}),
-                ai_targets,
-                fasta_path,
-            )
-            db.update_stage(job_id, "primers", "done", f"{len(primer_results)} genes")
-
-        # 4. Generate report
+        # 3. Generate report
         db.update_stage(job_id, "report", "running")
-        html = generate_html_report(job_id, pipeline_results, ai_results, primer_results)
+        html = generate_html_report(job_id, pipeline_results, ai_results)
         report_path = save_report(job_id, html, out_dir)
         db.update_stage(job_id, "report", "done")
 

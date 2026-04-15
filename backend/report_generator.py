@@ -1,6 +1,6 @@
 """
 HTML report generator.
-Combines pipeline + AI + primer results into a single HTML report.
+Combines pipeline + AI results into a single HTML report.
 """
 import json
 from datetime import datetime, timezone
@@ -15,59 +15,6 @@ RISK_COLORS = {
     "CRITICAL": ("#7f1d1d", "#fef2f2"),
     "UNKNOWN":  ("#6b7280", "#f9fafb"),
 }
-
-
-def _primer_rows(primer_list: list[dict]) -> str:
-    if not primer_list:
-        return "<p style='color:#6b7280'>No data available for primer design.</p>"
-
-    rows = []
-    for gene_result in primer_list:
-        gene   = gene_result.get("gene", "?")
-        note   = gene_result.get("note", "")
-        n_seqs = gene_result.get("n_sequences", 0)
-        cons   = gene_result.get("conserved_region_bp")
-        pairs  = gene_result.get("primers", [])
-
-        rows.append(f"""
-        <div class="gene-block">
-          <h3>&#x1F9EC; {gene}</h3>
-          <p><small>Sequences: {n_seqs} |
-             Conserved region: {cons or '&mdash;'} bp
-             {f'| <em>{note}</em>' if note else ''}</small></p>
-        """)
-
-        if pairs:
-            rows.append("""
-          <table>
-            <thead>
-              <tr>
-                <th>#</th><th>Direction</th><th>Sequence (5'&rarr;3')</th>
-                <th>Tm (&deg;C)</th><th>GC%</th><th>Amplicon (bp)</th>
-              </tr>
-            </thead><tbody>""")
-            for p in pairs:
-                rows.append(f"""
-              <tr>
-                <td rowspan="2">{p['pair']}</td>
-                <td>Forward</td>
-                <td><code>{p['forward']}</code></td>
-                <td>{p['fwd_tm'] or '&mdash;'}</td>
-                <td>{p['fwd_gc'] or '&mdash;'}</td>
-                <td rowspan="2">{p['amplicon'] or '&mdash;'}</td>
-              </tr>
-              <tr>
-                <td>Reverse</td>
-                <td><code>{p['reverse']}</code></td>
-                <td>{p['rev_tm'] or '&mdash;'}</td>
-                <td>{p['rev_gc'] or '&mdash;'}</td>
-              </tr>""")
-            rows.append("</tbody></table>")
-        else:
-            rows.append("<p><em>No primers could be designed for this gene.</em></p>")
-
-        rows.append("</div>")
-    return "\n".join(rows)
 
 
 def _kraken2_section(k2: dict) -> str:
@@ -178,8 +125,7 @@ def _amr_table(genes: list[dict]) -> str:
 
 def generate_html_report(job_id: str,
                           pipeline_results: dict[str, Any],
-                          ai_results: dict[str, Any],
-                          primer_results: list[dict]) -> str:
+                          ai_results: dict[str, Any]) -> str:
     """Returns the complete HTML report as a string."""
 
     sample      = pipeline_results.get("sample_name", "Unknown")
@@ -193,16 +139,6 @@ def generate_html_report(job_id: str,
     risk_color, risk_bg = RISK_COLORS.get(risk, RISK_COLORS["UNKNOWN"])
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-    # AI PCR targets table rows
-    pcr_targets = ai_results.get("pcr_targets", [])
-    pcr_rows = ""
-    for t in pcr_targets:
-        pcr_rows += (
-            f"<tr><td><strong>{t.get('gene','')}</strong></td>"
-            f"<td>{t.get('rationale','')}</td>"
-            f"<td>{t.get('clinical_use','')}</td></tr>"
-        )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -376,20 +312,6 @@ def generate_html_report(job_id: str,
       <div class="ai-text">
         <strong>Epidemiology:</strong><br>{ai_results.get('epidemiology','&mdash;')}
       </div>
-      {f'''
-      <h4 style="margin-top:1rem">Recommended PCR Targets</h4>
-      <table>
-        <thead><tr><th>Gene</th><th>Rationale</th><th>Clinical Use</th></tr></thead>
-        <tbody>{pcr_rows}</tbody>
-      </table>''' if pcr_rows else ''}
-    </div>
-  </div>
-
-  <!-- Primers -->
-  <div class="section">
-    <div class="section-title">&#x1F9EA; PCR Primer Design</div>
-    <div class="section-body">
-      {_primer_rows(primer_results)}
     </div>
   </div>
 
