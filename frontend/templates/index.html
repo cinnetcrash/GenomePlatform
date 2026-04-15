@@ -788,28 +788,37 @@ async function pollJob(jobId, t0, timer) {
   } catch(e) {}
 }
 
+// Per-job expanded set (keyed by jobId)
+const _jobExpandedStages = {};
+
+function _toggleJobStageDetail(jobId, key) {
+  if (!_jobExpandedStages[jobId]) _jobExpandedStages[jobId] = new Set();
+  const s = _jobExpandedStages[jobId];
+  if (s.has(key)) s.delete(key); else s.add(key);
+  // Re-render — retrieve last cached stages for this job
+  if (window._lastJobStages && window._lastJobStages[jobId])
+    renderJobStages(jobId, window._lastJobStages[jobId], window._lastJobT0[jobId]||Date.now());
+}
+
 function renderJobStages(jobId, stages, t0) {
+  if (!window._lastJobStages) window._lastJobStages = {};
+  if (!window._lastJobT0)     window._lastJobT0     = {};
+  window._lastJobStages[jobId] = stages;
+  window._lastJobT0[jobId]     = t0;
+
   const container = document.getElementById(`stages-${jobId}`);
   if (!container) return;
+  if (!_jobExpandedStages[jobId]) _jobExpandedStages[jobId] = new Set();
+
   let done = 0;
   const rows = STAGE_ORDER.map(key => {
     const stage = stages[key] || {status:'pending'};
-    let dot='dot-pending', txt='Pending';
-    if (stage.status==='running')  { dot='dot-running'; txt='Running…'; }
-    else if (stage.status==='done')    { dot='dot-done'; done++;
-      const el = fmtElapsed(stage.started_at, stage.updated_at);
-      txt = el ? `Done · ${el}` : 'Done'; }
-    else if (stage.status==='failed')  { dot='dot-failed'; txt='Failed'; }
-    else if (stage.status==='skipped') { dot='dot-skipped'; txt='Skipped'; done++; }
-    return `<div class="flex items-center justify-between py-1">
-      <div class="flex items-center">
-        <span class="stage-dot ${dot}"></span>
-        <span class="text-slate-600 text-xs">${STAGE_LABELS[key]||key}</span>
-      </div>
-      <span class="text-xs text-slate-400">${txt}</span>
-    </div>`;
+    if (stage.status === 'done' || stage.status === 'skipped') done++;
+    return _buildStageItem(key, stage, _jobExpandedStages[jobId],
+                           `k=>_toggleJobStageDetail('${jobId}',k)`);
   });
   container.innerHTML = rows.join('');
+
   const pct = Math.max(5, Math.round((done/STAGE_ORDER.length)*100));
   const fill = document.getElementById(`fill-${jobId}`);
   if (fill) fill.style.width = pct+'%';
@@ -869,54 +878,12 @@ function toggleStageDetail(key) {
 function updateStages(stages) {
   window._lastStages = stages;
   const container = document.getElementById('stages-list');
+  if (!container) return;
   let doneCount = 0;
   const rows = STAGE_ORDER.map(key => {
     const stage = stages[key] || {status:'pending'};
-    let dotClass='dot-pending', statusText='Pending';
-    if (stage.status==='running')  { dotClass='dot-running'; statusText='Running…'; }
-    else if (stage.status==='done')    { dotClass='dot-done'; doneCount++;
-      const elapsed = fmtElapsed(stage.started_at, stage.updated_at);
-      statusText = elapsed ? `Done · ${elapsed}` : 'Done'; }
-    else if (stage.status==='failed')  { dotClass='dot-failed'; statusText='Failed'; }
-    else if (stage.status==='skipped') { dotClass='dot-skipped'; statusText='Skipped'; doneCount++; }
-
-    const hasDetail = stage.detail && String(stage.detail).trim().length > 0 && stage.status !== 'pending';
-    const isExpanded = expandedStages.has(key);
-    const detailRaw = String(stage.detail || '');
-    // Try to pretty-print JSON detail
-    let detailHtml = '';
-    if (hasDetail) {
-      let parsed = null;
-      try { parsed = JSON.parse(detailRaw); } catch {}
-      if (parsed && typeof parsed === 'object') {
-        detailHtml = JSON.stringify(parsed, null, 2);
-      } else {
-        detailHtml = detailRaw;
-      }
-    }
-    const toggleBtn = hasDetail
-      ? `<button onclick="toggleStageDetail('${key}')"
-                 class="text-xs text-indigo-400 hover:text-indigo-600 ml-2 underline">
-           ${isExpanded ? 'hide' : 'details'}
-         </button>`
-      : '';
-    const detailPanel = hasDetail && isExpanded
-      ? `<div class="mt-1 ml-5 p-2 bg-slate-50 border border-slate-200 rounded-lg
-                     text-xs text-slate-600 font-mono whitespace-pre-wrap break-all
-                     max-h-40 overflow-y-auto">${detailHtml}</div>`
-      : '';
-
-    return `<div class="py-1.5">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center">
-          <span class="stage-dot ${dotClass}"></span>
-          <span class="text-slate-700 text-sm">${STAGE_LABELS[key]||key}</span>
-          ${toggleBtn}
-        </div>
-        <span class="text-xs text-slate-400">${statusText}</span>
-      </div>
-      ${detailPanel}
-    </div>`;
+    if (stage.status === 'done' || stage.status === 'skipped') doneCount++;
+    return _buildStageItem(key, stage, expandedStages, 'k=>toggleStageDetail(k)');
   });
   container.innerHTML = rows.join('');
   const pct = Math.max(5, Math.round((doneCount/STAGE_ORDER.length)*100));
@@ -1180,6 +1147,293 @@ function renderHistory(analyses) {
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
+}
+
+// ─── Stage Detail Renderers ───────────────────────────────────────────────
+// Each renderer returns an HTML string for the collapsible detail panel
+// of a completed pipeline stage.
+
+function _detailCard(content) {
+  return `<div class="mt-1.5 ml-5 rounded-lg border border-slate-200 bg-slate-50
+                      px-3 py-2.5 text-xs text-slate-700 space-y-1.5">${content}</div>`;
+}
+function _metricRow(label, value, mono=true) {
+  return `<div class="flex justify-between items-baseline gap-2">
+    <span class="text-slate-500 shrink-0">${label}</span>
+    <span class="${mono?'font-mono ':' '}font-semibold text-slate-700 text-right">${value??'—'}</span>
+  </div>`;
+}
+function _pill(text, cls='bg-slate-200 text-slate-600') {
+  return `<span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ${cls}">${text}</span>`;
+}
+function _miniBar(label, pct, cls='bg-indigo-400') {
+  const w = Math.min(100, pct);
+  return `<div class="flex items-center gap-2">
+    <span class="w-40 truncate text-slate-600 shrink-0" title="${label}">${label}</span>
+    <div class="flex-1 bg-slate-200 rounded-full h-1.5 overflow-hidden min-w-0">
+      <div class="${cls} h-full rounded-full" style="width:${w}%"></div>
+    </div>
+    <span class="w-9 text-right font-mono text-slate-500 shrink-0">${pct}%</span>
+  </div>`;
+}
+function _fmtBp(n) {
+  if (!n) return '—';
+  if (n >= 1e9) return (n/1e9).toFixed(2)+' Gb';
+  if (n >= 1e6) return (n/1e6).toFixed(2)+' Mb';
+  if (n >= 1e3) return (n/1e3).toFixed(0)+' Kb';
+  return n+' bp';
+}
+function _fmtNum(n) {
+  if (n == null) return '—';
+  if (n >= 1e6) return (n/1e6).toFixed(1)+'M';
+  if (n >= 1e3) return (n/1e3).toFixed(0)+'K';
+  return String(n);
+}
+
+function renderStageDetail(key, parsed, rawText) {
+  try {
+    switch(key) {
+      case 'kraken2':  return _renderKraken2(parsed);
+      case 'qc':       return _renderQc(parsed);
+      case 'assembly': return _renderAssembly(parsed);
+      case 'quast':    return _renderQuast(parsed);
+      case 'checkm2':  return _renderCheckm2(parsed);
+      case 'checkv':   return _renderCheckv(parsed);
+      case 'mlst':     return _renderMlst(parsed);
+      case 'amr':      return _renderAmr(parsed);
+      case 'abricate': return _renderAbricate(parsed);
+      case 'mobsuite': return _renderMobsuite(parsed);
+      case 'bandage':  return _renderBandage(parsed);
+      default:
+        if (!rawText) return '';
+        return _detailCard(`<pre class="whitespace-pre-wrap break-all font-mono text-slate-400
+                                        max-h-32 overflow-y-auto">${rawText.slice(0,400)}</pre>`);
+    }
+  } catch(e) { return ''; }
+}
+
+function _renderKraken2(d) {
+  if (!d) return '';
+  const taxa = (d.top_taxa || []).slice(0, 6);
+  const classified = d.classified_percent ?? '?';
+  const clsCls = classified >= 80 ? 'bg-emerald-100 text-emerald-700'
+               : classified >= 50 ? 'bg-amber-100 text-amber-700'
+               :                    'bg-red-100 text-red-700';
+  const bars = taxa.map(t =>
+    _miniBar(t.name, t.percent, t.percent >= 5 ? 'bg-indigo-500' : 'bg-indigo-300')
+  ).join('');
+  return _detailCard(`
+    <div class="flex gap-1.5 flex-wrap mb-1">
+      ${_pill(classified+'% classified', clsCls)}
+      ${d.top_name ? _pill(d.top_name, 'bg-indigo-100 text-indigo-700') : ''}
+    </div>
+    <div class="space-y-1">${bars}</div>
+  `);
+}
+
+function _renderQc(d) {
+  if (!d) return '';
+  return _detailCard(`
+    ${d.reads_before != null ? _metricRow('Reads (raw)',      _fmtNum(d.reads_before)) : ''}
+    ${d.reads_after  != null ? _metricRow('Reads (filtered)', _fmtNum(d.reads_after))  : ''}
+    ${d.q30_rate     != null ? _metricRow('Q30 rate',         d.q30_rate+'%')          : ''}
+    ${d.mean_length  != null ? _metricRow('Mean length',      d.mean_length+' bp')     : ''}
+    ${d.total_bases  != null ? _metricRow('Total bases',      _fmtBp(d.total_bases))   : ''}
+  `);
+}
+
+function _renderAssembly(d) {
+  if (!d) return '';
+  const qc = d.qc_checks || [];
+  const qcBadges = qc.map(c => {
+    const cls = c.status==='pass' ? 'bg-emerald-100 text-emerald-700'
+              : c.status==='warn' ? 'bg-amber-100 text-amber-700'
+              :                     'bg-red-100 text-red-700';
+    return _pill(c.metric, cls);
+  }).join(' ');
+  return _detailCard(`
+    ${d.method ? `<div class="mb-1">${_pill(d.method, 'bg-slate-200 text-slate-600')}</div>` : ''}
+    ${d.contigs         != null ? _metricRow('Contigs',        d.contigs.toLocaleString()) : ''}
+    ${d.n50_bp          != null ? _metricRow('N50',            _fmtBp(d.n50_bp))           : ''}
+    ${d.total_length_bp != null ? _metricRow('Total length',   _fmtBp(d.total_length_bp))  : ''}
+    ${d.gc_percent      != null ? _metricRow('GC content',     d.gc_percent.toFixed(1)+'%') : ''}
+    ${qcBadges ? `<div class="flex flex-wrap gap-1 pt-1">${qcBadges}</div>` : ''}
+  `);
+}
+
+function _renderQuast(d) {
+  if (!d) return '';
+  return _detailCard(`
+    ${d.contigs       != null ? _metricRow('Contigs',        d.contigs.toLocaleString())    : ''}
+    ${d.n50           != null ? _metricRow('N50',            _fmtBp(d.n50))                 : ''}
+    ${d.n90           != null ? _metricRow('N90',            _fmtBp(d.n90))                 : ''}
+    ${d.l50           != null ? _metricRow('L50',            d.l50)                         : ''}
+    ${d.total_length  != null ? _metricRow('Total length',   _fmtBp(d.total_length))        : ''}
+    ${d.gc_pct        != null ? _metricRow('GC content',     d.gc_pct.toFixed(1)+'%')       : ''}
+    ${d.largest_contig!= null ? _metricRow('Largest contig', _fmtBp(d.largest_contig))      : ''}
+  `);
+}
+
+function _renderCheckm2(d) {
+  if (!d) return '';
+  const comp = d.completeness != null ? parseFloat(d.completeness) : null;
+  const cont = d.contamination!= null ? parseFloat(d.contamination): null;
+  const compCls = comp == null ? '' : comp >= 90 ? 'bg-emerald-100 text-emerald-700'
+                                    : comp >= 70 ? 'bg-amber-100 text-amber-700'
+                                    :              'bg-red-100 text-red-700';
+  const contCls = cont == null ? '' : cont <= 5  ? 'bg-emerald-100 text-emerald-700'
+                                    : cont <= 10 ? 'bg-amber-100 text-amber-700'
+                                    :              'bg-red-100 text-red-700';
+  // Completeness progress bar
+  const compBar = comp != null ? `
+    <div class="mt-1">
+      <div class="flex justify-between text-xs mb-0.5">
+        <span class="text-slate-500">Completeness</span>
+        <span class="font-mono font-semibold">${comp.toFixed(1)}%</span>
+      </div>
+      <div class="bg-slate-200 rounded-full h-2 overflow-hidden">
+        <div class="h-full rounded-full transition-all ${comp>=90?'bg-emerald-500':comp>=70?'bg-amber-400':'bg-red-400'}"
+             style="width:${comp}%"></div>
+      </div>
+    </div>` : '';
+  return _detailCard(`
+    ${compBar}
+    ${cont  != null ? _metricRow('Contamination', cont.toFixed(1)+'%')  : ''}
+    ${d.model       ? _metricRow('Model',         d.model, false)       : ''}
+  `);
+}
+
+function _renderCheckv(d) {
+  if (!d) return '';
+  return _detailCard(`
+    ${d.total_contigs   != null ? _metricRow('Contigs analyzed', d.total_contigs)    : ''}
+    ${d.complete        != null ? _metricRow('Complete',         d.complete)         : ''}
+    ${d.high_quality    != null ? _metricRow('High quality',     d.high_quality)     : ''}
+    ${d.medium_quality  != null ? _metricRow('Medium quality',   d.medium_quality)   : ''}
+    ${d.low_quality     != null ? _metricRow('Low quality',      d.low_quality)      : ''}
+  `);
+}
+
+function _renderMlst(d) {
+  if (!d) return '';
+  const alleles = (d.alleles || []).join('  ');
+  return _detailCard(`
+    <div class="flex gap-1.5 flex-wrap mb-1">
+      ${d.scheme ? _pill(d.scheme, 'bg-blue-100 text-blue-700') : ''}
+      ${d.st && d.st !== '-' ? _pill('ST '+d.st, 'bg-indigo-100 text-indigo-700') : _pill('ST —','bg-slate-100 text-slate-500')}
+    </div>
+    ${alleles ? `<div class="font-mono text-slate-500 leading-relaxed break-all">${alleles}</div>` : ''}
+  `);
+}
+
+function _renderAmr(d) {
+  if (!d) return '';
+  const genes = (d.genes || []);
+  const preview = genes.slice(0, 5);
+  const extra = genes.length > 5 ? `<div class="text-slate-400 mt-1 text-center">+${genes.length-5} more — see full report</div>` : '';
+  const countCls = genes.length > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700';
+  const rows = preview.map(g => `
+    <div class="flex justify-between items-center py-1 border-b border-slate-100 last:border-0 gap-2">
+      <span class="font-mono font-medium text-slate-700 truncate">${g.gene||g.name||'?'}</span>
+      <div class="flex items-center gap-1.5 shrink-0">
+        ${g.class ? _pill(g.class, 'bg-orange-100 text-orange-700') : ''}
+        ${g.identity != null ? `<span class="text-slate-400 font-mono">${g.identity}%</span>` : ''}
+      </div>
+    </div>`).join('');
+  return _detailCard(`
+    <div class="mb-2">${_pill(genes.length+' gene(s) detected', countCls)}</div>
+    ${rows}
+    ${extra}
+  `);
+}
+
+function _renderAbricate(d) {
+  if (!d || d.error) return '';
+  const dbs = Object.entries(d).filter(([k]) => k !== 'error' && Array.isArray(d[k]));
+  if (!dbs.length) return '';
+  const rows = dbs.map(([dbName, hits]) => {
+    const count = hits.length;
+    const cls = count > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700';
+    return `<div class="flex justify-between items-center py-1 border-b border-slate-100 last:border-0">
+      <span class="font-semibold uppercase tracking-wide text-slate-600">${dbName}</span>
+      ${_pill(count > 0 ? count+' hit(s)' : 'Clean', cls)}
+    </div>`;
+  }).join('');
+  return _detailCard(rows);
+}
+
+function _renderMobsuite(d) {
+  if (!d) return '';
+  const plasmids = d.plasmids || [];
+  const cls = plasmids.length > 0 ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700';
+  const rows = plasmids.slice(0, 3).map(p => `
+    <div class="flex flex-wrap gap-1 py-1 border-b border-slate-100 last:border-0 items-center">
+      <span class="font-mono text-slate-600 truncate max-w-[140px]">${p.plasmid_id||p.id||'?'}</span>
+      ${p.mobility ? _pill(p.mobility, 'bg-purple-100 text-purple-700') : ''}
+      ${p.rep_types||p.replicon ? _pill(p.rep_types||p.replicon,'bg-slate-100 text-slate-600') : ''}
+    </div>`).join('');
+  const extra = plasmids.length > 3 ? `<div class="text-slate-400 text-center mt-1">+${plasmids.length-3} more</div>` : '';
+  return _detailCard(`
+    <div class="mb-2">${_pill(plasmids.length+' plasmid(s)', cls)}</div>
+    ${rows}
+    ${extra}
+  `);
+}
+
+function _renderBandage(d) {
+  if (!d) return '';
+  const imgPath = d.image_path || '';
+  const m = imgPath.match(/([0-9a-f]{32})/);
+  if (!m) return '';
+  return _detailCard(`
+    <img src="/assembly-graph/${m[1]}" alt="Assembly graph"
+         class="w-full rounded-lg max-h-48 object-contain bg-white border border-slate-100"
+         loading="lazy"
+         onerror="this.style.display='none'">
+  `);
+}
+
+// Shared stage-item builder used by both updateStages and renderJobStages
+function _buildStageItem(key, stage, expandedSet, toggleFn) {
+  let dotClass='dot-pending', statusText='Pending';
+  if (stage.status==='running')  { dotClass='dot-running'; statusText='Running…'; }
+  else if (stage.status==='done') {
+    dotClass='dot-done';
+    const el = fmtElapsed(stage.started_at, stage.updated_at);
+    statusText = el ? `Done · ${el}` : 'Done';
+  }
+  else if (stage.status==='failed')  { dotClass='dot-failed';  statusText='Failed'; }
+  else if (stage.status==='skipped') { dotClass='dot-skipped'; statusText='Skipped'; }
+
+  const hasDetail = stage.detail && String(stage.detail).trim() && stage.status !== 'pending';
+  const isExpanded = expandedSet.has(key);
+
+  let parsed = null;
+  if (hasDetail) { try { parsed = JSON.parse(String(stage.detail)); } catch {} }
+
+  const chevron = hasDetail
+    ? `<button onclick="(${toggleFn})('${key}')"
+               class="ml-1 text-slate-300 hover:text-indigo-500 transition-colors leading-none"
+               title="Toggle details">
+         ${isExpanded ? '▲' : '▼'}
+       </button>`
+    : '';
+
+  const detailPanel = hasDetail && isExpanded
+    ? renderStageDetail(key, parsed, String(stage.detail || ''))
+    : '';
+
+  return `<div class="py-1.5">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center">
+        <span class="stage-dot ${dotClass}"></span>
+        <span class="text-slate-700 text-sm">${STAGE_LABELS[key]||key}</span>
+        ${chevron}
+      </div>
+      <span class="text-xs text-slate-400">${statusText}</span>
+    </div>
+    ${detailPanel}
+  </div>`;
 }
 
 // ─── System Check ─────────────────────────────────────────────────────────
