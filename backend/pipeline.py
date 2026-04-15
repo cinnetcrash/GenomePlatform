@@ -555,38 +555,62 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
             db.update_stage(job_id, "assembly", "failed", "All Flye runs failed.")
             return None, []
 
-    else:  # Illumina (SE or PE)
-        # Reserve ~90% of available RAM for SPAdes; prevents disk-swap slowdowns.
+    else:  # Illumina
         import psutil
         avail_gb = max(4, int(psutil.virtual_memory().available / 1e9 * 0.90))
 
-        cmd = [
-            "shovill",
-            "--R1",        sanitize_path(fastq),
-            "--outdir",    str(asm_dir),
-            "--cpus",      str(ASSEMBLY_THREADS),
-            "--ram",       str(avail_gb),
-            "--assembler", SHOVILL_ASSEMBLER,
-            "--noreadcorr",             # skip Shovill's lighter/trimmomatic step
-                                        # (fastp QC was already run upstream)
-            "--force",
-        ]
         if fastq_r2:
-            cmd += ["--R2", sanitize_path(fastq_r2)]
+            # ── Paired-end → Shovill ──────────────────────────────────────────
+            # --noreadcorr: skip Shovill's lighter/trimmomatic correction step;
+            # fastp already handled QC upstream → significant speedup.
+            cmd = [
+                "shovill",
+                "--R1",        sanitize_path(fastq),
+                "--R2",        sanitize_path(fastq_r2),
+                "--outdir",    str(asm_dir),
+                "--cpus",      str(ASSEMBLY_THREADS),
+                "--ram",       str(avail_gb),
+                "--assembler", SHOVILL_ASSEMBLER,
+                "--noreadcorr",
+                "--force",
+            ]
+            rc, out, err = _run(cmd, asm_dir, timeout=10800, env_name="shovill")
+            candidates = list(asm_dir.glob("contigs.fa")) + list(asm_dir.glob("assembly.fasta"))
+            if candidates:
+                fasta  = candidates[0]
+                method = f"shovill-{SHOVILL_ASSEMBLER} (PE)"
+            else:
+                db.update_stage(job_id, "assembly", "failed", err[-500:])
+                return None, []
 
-        # For spades backend: also skip BayesHammer error correction since
-        # fastp already trimmed and quality-filtered the reads.
-        if SHOVILL_ASSEMBLER == "spades":
-            cmd += ["--opts", "--only-assembler"]
-
-        rc, out, err = _run(cmd, asm_dir, timeout=10800, env_name="shovill")
-        candidates = list(asm_dir.glob("contigs.fa")) + list(asm_dir.glob("assembly.fasta"))
-        if candidates:
-            fasta  = candidates[0]
-            method = "shovill"
         else:
-            db.update_stage(job_id, "assembly", "failed", err[-500:])
-            return None, []
+            # ── Single-end → SPAdes directly ──────────────────────────────────
+            # Shovill requires R2; for SE data use SPAdes --s1 mode.
+            spades_bin = CONDA_BASE / "envs" / "shovill" / "bin" / "spades.py"
+            spades_out = asm_dir / "spades_se"
+            spades_out.mkdir(exist_ok=True)
+            cmd = [
+                str(spades_bin),
+                "--s1",         sanitize_path(fastq),
+                "-o",           str(spades_out),
+                "--threads",    str(ASSEMBLY_THREADS),
+                "--memory",     str(avail_gb),
+                "--only-assembler",   # fastp already did QC
+                "--cov-cutoff",  "auto",
+            ]
+            rc, out, err = _run(cmd, spades_out, timeout=10800, env_name="shovill")
+            # SPAdes outputs contigs.fasta
+            candidates = list(spades_out.glob("contigs.fasta")) + \
+                         list(spades_out.glob("scaffolds.fasta"))
+            if candidates:
+                # Copy to standard name expected by downstream stages
+                import shutil as _shutil
+                fasta = asm_dir / "contigs.fa"
+                _shutil.copy2(candidates[0], fasta)
+                method = "spades-se"
+            else:
+                db.update_stage(job_id, "assembly", "failed", err[-500:])
+                return None, []
 
     # Compute and store stats
     try:
