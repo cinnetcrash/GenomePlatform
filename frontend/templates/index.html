@@ -9,55 +9,60 @@
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     body { font-family: 'Inter', sans-serif; }
 
-    .drop-zone {
-      border: 2px dashed #6366f1;
-      transition: all 0.2s;
-    }
-    .drop-zone.drag-over {
-      border-color: #4f46e5;
-      background: #eef2ff;
-    }
+    .drop-zone { border: 2px dashed #6366f1; transition: all 0.2s; }
+    .drop-zone.drag-over { border-color: #4f46e5; background: #eef2ff; }
+
     .stage-dot {
       width: 12px; height: 12px; border-radius: 50%;
-      display: inline-block; margin-right: 8px;
-      flex-shrink: 0;
+      display: inline-block; margin-right: 8px; flex-shrink: 0;
     }
     .dot-pending  { background: #d1d5db; }
-    .dot-running  { background: #f59e0b; animation: pulse 1s infinite; }
+    .dot-running  { background: #f59e0b; animation: blink 1s infinite; }
     .dot-done     { background: #22c55e; }
     .dot-failed   { background: #ef4444; }
     .dot-skipped  { background: #94a3b8; }
 
-    @keyframes pulse {
+    @keyframes blink {
       0%, 100% { opacity: 1; }
-      50%       { opacity: .4; }
+      50%       { opacity: .35; }
     }
 
-    .progress-bar {
-      height: 6px; border-radius: 9999px;
-      background: #e2e8f0; overflow: hidden;
-    }
+    .progress-bar  { height: 6px; border-radius: 9999px; background: #e2e8f0; overflow: hidden; }
     .progress-fill {
       height: 100%; border-radius: 9999px;
       background: linear-gradient(90deg, #6366f1, #8b5cf6);
       transition: width 0.5s ease;
     }
+    .gauge-bar  { height: 8px; border-radius: 9999px; background: #e2e8f0; overflow: hidden; }
+    .gauge-fill { height: 100%; border-radius: 9999px; transition: width 1s ease; }
 
-    .gauge-bar {
-      height: 8px; border-radius: 9999px;
-      background: #e2e8f0; overflow: hidden;
+    .metric-card {
+      background: #f8fafc; border-radius: 10px;
+      border: 1px solid #e2e8f0; padding: 1rem 1.2rem;
     }
-    .gauge-fill {
-      height: 100%; border-radius: 9999px;
-      transition: width 1s ease;
+    .metric-label { font-size: .72rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+    .metric-value { font-size: 1.35rem; font-weight: 700; color: #1e40af; margin-top: .15rem; }
+    .metric-sub   { font-size: .75rem; color: #94a3b8; margin-top: .1rem; }
+
+    .section-header {
+      font-size: .7rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .08em; color: #64748b; margin-bottom: .75rem;
     }
+
+    .amr-pill {
+      display: inline-block; padding: .2rem .65rem;
+      border-radius: 9999px; font-size: .75rem; font-weight: 600;
+      background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;
+      margin: .2rem;
+    }
+    .amr-pill.none { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
   </style>
 </head>
 <body class="bg-slate-50 min-h-screen">
 
   <!-- Header -->
   <header class="bg-gradient-to-r from-indigo-700 to-violet-700 text-white py-6 px-8 shadow-lg">
-    <div class="max-w-4xl mx-auto flex items-center justify-between">
+    <div class="max-w-5xl mx-auto flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-bold tracking-tight">🧬 LycianWay</h1>
         <p class="text-indigo-200 text-sm mt-1">
@@ -71,35 +76,29 @@
     </div>
   </header>
 
-  <main class="max-w-4xl mx-auto px-4 py-10 space-y-8">
+  <main class="max-w-5xl mx-auto px-4 py-10 space-y-6">
 
     <!-- System Stats Widget -->
-    <div id="stats-card" class="bg-white rounded-2xl shadow-sm border border-slate-100 px-8 py-5">
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 px-8 py-5">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-sm font-semibold text-slate-600 uppercase tracking-wide">Server Resources</h3>
         <span id="stats-updated" class="text-xs text-slate-400"></span>
       </div>
       <div class="grid grid-cols-2 gap-6">
-        <!-- CPU -->
         <div>
           <div class="flex justify-between text-sm mb-1">
             <span class="text-slate-600 font-medium">CPU Usage</span>
             <span id="cpu-pct" class="text-slate-500 font-mono">—</span>
           </div>
-          <div class="gauge-bar">
-            <div id="cpu-fill" class="gauge-fill bg-indigo-500" style="width:0%"></div>
-          </div>
+          <div class="gauge-bar"><div id="cpu-fill" class="gauge-fill bg-indigo-500" style="width:0%"></div></div>
           <div class="text-xs text-slate-400 mt-1" id="cpu-detail">Loading...</div>
         </div>
-        <!-- Disk -->
         <div>
           <div class="flex justify-between text-sm mb-1">
             <span class="text-slate-600 font-medium">Disk Usage</span>
             <span id="disk-pct" class="text-slate-500 font-mono">—</span>
           </div>
-          <div class="gauge-bar">
-            <div id="disk-fill" class="gauge-fill bg-violet-500" style="width:0%"></div>
-          </div>
+          <div class="gauge-bar"><div id="disk-fill" class="gauge-fill bg-violet-500" style="width:0%"></div></div>
           <div class="text-xs text-slate-400 mt-1" id="disk-detail">Loading...</div>
         </div>
       </div>
@@ -109,13 +108,9 @@
     <div id="upload-card" class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
       <div class="px-8 py-6 border-b border-slate-100">
         <h2 class="text-lg font-semibold text-slate-800">Upload FASTQ File</h2>
-        <p class="text-sm text-slate-500 mt-1">
-          MinION or Illumina FASTQ / FASTQ.gz — maximum 2 GB
-        </p>
+        <p class="text-sm text-slate-500 mt-1">MinION or Illumina FASTQ / FASTQ.gz — maximum 2 GB</p>
       </div>
       <div class="px-8 py-6">
-
-        <!-- Drop zone -->
         <div id="drop-zone"
              class="drop-zone rounded-xl bg-slate-50 p-10 text-center cursor-pointer"
              onclick="document.getElementById('file-input').click()"
@@ -123,40 +118,26 @@
              ondragleave="handleDragLeave(event)"
              ondrop="handleDrop(event)">
           <div class="text-5xl mb-3">📂</div>
-          <p class="text-slate-600 font-medium">
-            Drag and drop your file here, or click to browse
-          </p>
-          <p class="text-slate-400 text-sm mt-1">
-            .fastq · .fastq.gz · .fq · .fq.gz
-          </p>
-          <input id="file-input" type="file"
-                 accept=".fastq,.fastq.gz,.fq,.fq.gz"
-                 class="hidden"
+          <p class="text-slate-600 font-medium">Drag and drop your file here, or click to browse</p>
+          <p class="text-slate-400 text-sm mt-1">.fastq · .fastq.gz · .fq · .fq.gz</p>
+          <input id="file-input" type="file" accept=".fastq,.fastq.gz,.fq,.fq.gz" class="hidden"
                  onchange="handleFileSelect(this.files[0])">
         </div>
-
-        <!-- Selected file info -->
         <div id="file-info" class="hidden mt-4 p-4 bg-indigo-50 rounded-lg border border-indigo-100">
           <div class="flex items-center justify-between">
             <div>
               <span class="font-medium text-indigo-700" id="file-name"></span>
               <span class="text-slate-500 text-sm ml-2" id="file-size"></span>
             </div>
-            <button onclick="clearFile()"
-                    class="text-slate-400 hover:text-red-500 text-sm">✕</button>
+            <button onclick="clearFile()" class="text-slate-400 hover:text-red-500 text-sm">✕</button>
           </div>
         </div>
-
-        <!-- Upload button -->
-        <button id="upload-btn"
-                onclick="startUpload()"
+        <button id="upload-btn" onclick="startUpload()"
                 class="hidden mt-4 w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700
                        text-white font-semibold rounded-xl transition-colors duration-200
                        disabled:opacity-50 disabled:cursor-not-allowed">
           🚀 Start Analysis
         </button>
-
-        <!-- Upload progress -->
         <div id="upload-progress" class="hidden mt-4">
           <div class="flex justify-between text-sm text-slate-500 mb-1">
             <span>Uploading...</span>
@@ -166,7 +147,6 @@
             <div class="progress-fill" id="upload-fill" style="width:0%"></div>
           </div>
         </div>
-
       </div>
     </div>
 
@@ -179,17 +159,12 @@
             Job ID: <code id="display-job-id" class="bg-slate-100 px-1.5 py-0.5 rounded text-xs"></code>
           </p>
         </div>
-        <div id="overall-status"
-             class="px-3 py-1 rounded-full text-sm font-semibold bg-amber-100 text-amber-700">
+        <div id="overall-status" class="px-3 py-1 rounded-full text-sm font-semibold bg-amber-100 text-amber-700">
           Running
         </div>
       </div>
       <div class="px-8 py-6">
-        <!-- Stages -->
-        <div id="stages-list" class="space-y-3 mb-6">
-          <!-- Populated by JS -->
-        </div>
-        <!-- Progress bar -->
+        <div id="stages-list" class="space-y-3 mb-6"></div>
         <div class="progress-bar">
           <div class="progress-fill" id="overall-fill" style="width:5%"></div>
         </div>
@@ -197,27 +172,75 @@
       </div>
     </div>
 
-    <!-- Completed Card -->
-    <div id="done-card" class="hidden bg-white rounded-2xl shadow-sm border border-emerald-200">
-      <div class="px-8 py-6 flex items-center gap-4">
-        <div class="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center text-2xl">✅</div>
-        <div class="flex-1">
-          <h2 class="text-lg font-semibold text-slate-800">Analysis Complete</h2>
-          <p class="text-slate-500 text-sm">Report will be automatically deleted after 24 hours.</p>
+    <!-- Results Summary Card (shown after completion) -->
+    <div id="results-card" class="hidden bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+
+      <!-- Header bar -->
+      <div class="px-8 py-5 border-b border-slate-100 flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-semibold text-slate-800">Analysis Results</h2>
+          <p class="text-sm text-slate-500 mt-0.5" id="result-job-label"></p>
         </div>
         <div class="flex gap-3">
           <button onclick="resetAll()"
-                  class="py-2.5 px-5 border border-slate-200 hover:border-slate-300
+                  class="py-2 px-4 border border-slate-200 hover:border-slate-300
                          text-slate-600 font-semibold rounded-xl transition-colors text-sm">
             ↩ New Analysis
           </button>
-          <a id="report-link" href="#" target="_blank"
-             class="py-2.5 px-6 bg-emerald-600 hover:bg-emerald-700
-                    text-white font-semibold rounded-xl transition-colors">
-            📄 Download Report
+          <a id="view-link" href="#" target="_blank"
+             class="py-2 px-4 bg-indigo-100 hover:bg-indigo-200
+                    text-indigo-700 font-semibold rounded-xl transition-colors text-sm">
+            🔍 View Report
+          </a>
+          <a id="report-link" href="#"
+             class="py-2 px-5 bg-emerald-600 hover:bg-emerald-700
+                    text-white font-semibold rounded-xl transition-colors text-sm">
+            ⬇ Download
           </a>
         </div>
       </div>
+
+      <!-- QC Section -->
+      <div class="px-8 pt-6 pb-2">
+        <div class="section-header">📊 Read Quality</div>
+        <div id="qc-grid" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+      </div>
+
+      <!-- Assembly Section -->
+      <div class="px-8 pt-5 pb-2">
+        <div class="section-header">🔧 Assembly Statistics</div>
+        <div id="asm-grid" class="grid grid-cols-2 sm:grid-cols-5 gap-3"></div>
+      </div>
+
+      <!-- MLST + AMR side by side -->
+      <div class="px-8 pt-5 pb-6 grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <!-- MLST -->
+        <div>
+          <div class="section-header">🔬 MLST Typing</div>
+          <div class="metric-card">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <div class="metric-label">Scheme</div>
+                <div class="metric-value text-base" id="mlst-scheme">—</div>
+              </div>
+              <div>
+                <div class="metric-label">Sequence Type</div>
+                <div class="metric-value" id="mlst-st">—</div>
+              </div>
+            </div>
+            <div class="mt-2 text-xs text-slate-500" id="mlst-alleles"></div>
+          </div>
+        </div>
+        <!-- AMR -->
+        <div>
+          <div class="section-header">💊 Antimicrobial Resistance</div>
+          <div class="metric-card">
+            <div class="metric-label">Detected Genes</div>
+            <div id="amr-pills" class="mt-2"></div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <!-- Error Card -->
@@ -229,7 +252,7 @@
           <p class="text-slate-600 text-sm mt-1 font-medium">Error details:</p>
           <pre id="error-msg"
                class="mt-2 text-xs text-slate-500 bg-slate-50 border border-slate-200
-                      rounded-lg p-3 whitespace-pre-wrap break-words max-h-40 overflow-y-auto font-mono"></pre>
+                      rounded-lg p-3 whitespace-pre-wrap break-words max-h-48 overflow-y-auto font-mono"></pre>
           <button onclick="resetAll()"
                   class="mt-4 py-2.5 px-5 bg-indigo-600 hover:bg-indigo-700
                          text-white font-semibold rounded-xl transition-colors text-sm">
@@ -271,7 +294,6 @@
 let selectedFile = null;
 let currentJobId = null;
 let pollTimer    = null;
-let statsTimer   = null;
 let startTime    = null;
 
 const STAGE_LABELS = {
@@ -285,8 +307,31 @@ const STAGE_LABELS = {
   primers:    "🧪 PCR Primer Design",
   report:     "📄 Report Generation",
 };
-
 const STAGE_ORDER = Object.keys(STAGE_LABELS);
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+function fmt(n) {
+  if (n === undefined || n === null || n === "") return "—";
+  if (typeof n === "number") {
+    if (n >= 1e9)  return (n / 1e9).toFixed(2) + " Gb";
+    if (n >= 1e6)  return (n / 1e6).toFixed(2) + " Mb";
+    if (n >= 1e3)  return (n / 1e3).toFixed(1) + " kb";
+    return n.toString();
+  }
+  return String(n);
+}
+
+function metricCard(label, value, sub) {
+  return `<div class="metric-card">
+    <div class="metric-label">${label}</div>
+    <div class="metric-value">${value}</div>
+    ${sub ? `<div class="metric-sub">${sub}</div>` : ""}
+  </div>`;
+}
+
+function tryJSON(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
 
 // ─── System Stats ─────────────────────────────────────────────────────────
 async function fetchStats() {
@@ -294,49 +339,31 @@ async function fetchStats() {
     const res = await fetch('/system-stats');
     if (!res.ok) return;
     const d = await res.json();
+    const cpu = d.cpu, disk = d.disk;
 
-    const cpu = d.cpu;
-    const disk = d.disk;
-
-    document.getElementById('cpu-pct').textContent   = cpu.percent.toFixed(1) + '%';
+    document.getElementById('cpu-pct').textContent = cpu.percent.toFixed(1) + '%';
     document.getElementById('cpu-detail').textContent =
       `Budget: ${cpu.budget} / ${cpu.total_cores} threads (80% cap)`;
-    const cpuFill = document.getElementById('cpu-fill');
-    cpuFill.style.width = cpu.percent + '%';
-    cpuFill.className = 'gauge-fill ' + (
-      cpu.percent > 85 ? 'bg-red-500' :
-      cpu.percent > 60 ? 'bg-amber-500' : 'bg-indigo-500'
-    );
+    const cf = document.getElementById('cpu-fill');
+    cf.style.width = cpu.percent + '%';
+    cf.className = 'gauge-fill ' + (cpu.percent > 85 ? 'bg-red-500' : cpu.percent > 60 ? 'bg-amber-500' : 'bg-indigo-500');
 
-    document.getElementById('disk-pct').textContent  = disk.percent.toFixed(1) + '%';
+    document.getElementById('disk-pct').textContent = disk.percent.toFixed(1) + '%';
     document.getElementById('disk-detail').textContent =
       `${disk.used_gb} GB used of ${disk.total_gb} GB (${disk.free_gb} GB free)`;
-    const diskFill = document.getElementById('disk-fill');
-    diskFill.style.width = disk.percent + '%';
-    diskFill.className = 'gauge-fill ' + (
-      disk.percent > 90 ? 'bg-red-500' :
-      disk.percent > 75 ? 'bg-amber-500' : 'bg-violet-500'
-    );
+    const df = document.getElementById('disk-fill');
+    df.style.width = disk.percent + '%';
+    df.className = 'gauge-fill ' + (disk.percent > 90 ? 'bg-red-500' : disk.percent > 75 ? 'bg-amber-500' : 'bg-violet-500');
 
-    const now = new Date().toLocaleTimeString();
-    document.getElementById('stats-updated').textContent = 'Updated ' + now;
-  } catch (e) {
-    console.warn('Stats fetch failed:', e);
-  }
+    document.getElementById('stats-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) { console.warn('Stats fetch:', e); }
 }
-
-// Poll stats every 10 seconds
 fetchStats();
-statsTimer = setInterval(fetchStats, 10000);
+setInterval(fetchStats, 10000);
 
 // ─── File Selection ────────────────────────────────────────────────────────
-function handleDragOver(e) {
-  e.preventDefault();
-  document.getElementById('drop-zone').classList.add('drag-over');
-}
-function handleDragLeave(e) {
-  document.getElementById('drop-zone').classList.remove('drag-over');
-}
+function handleDragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('drag-over'); }
+function handleDragLeave(e) { document.getElementById('drop-zone').classList.remove('drag-over'); }
 function handleDrop(e) {
   e.preventDefault();
   document.getElementById('drop-zone').classList.remove('drag-over');
@@ -347,8 +374,7 @@ function handleDrop(e) {
 function handleFileSelect(file) {
   if (!file) return;
   const allowed = ['.fastq', '.fastq.gz', '.fq', '.fq.gz'];
-  const ok = allowed.some(ext => file.name.toLowerCase().endsWith(ext));
-  if (!ok) {
+  if (!allowed.some(ext => file.name.toLowerCase().endsWith(ext))) {
     alert('Only .fastq, .fastq.gz, .fq or .fq.gz files are supported.');
     return;
   }
@@ -369,7 +395,6 @@ function clearFile() {
 // ─── Upload ───────────────────────────────────────────────────────────────
 async function startUpload() {
   if (!selectedFile) return;
-
   const btn = document.getElementById('upload-btn');
   btn.disabled = true;
   btn.textContent = '⏳ Uploading...';
@@ -378,51 +403,39 @@ async function startUpload() {
   const formData = new FormData();
   formData.append('file', selectedFile);
 
-  try {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/upload');
-
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        document.getElementById('upload-pct').textContent = pct + '%';
-        document.getElementById('upload-fill').style.width = pct + '%';
-      }
-    };
-
-    xhr.onload = () => {
-      if (xhr.status === 200) {
-        const data = JSON.parse(xhr.responseText);
-        currentJobId = data.job_id;
-        startTime = Date.now();
-        showProgressCard(data.job_id);
-        startPolling(data.job_id);
-      } else {
-        let msg = 'Upload failed.';
-        try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
-        showError(msg);
-        btn.disabled = false;
-        btn.textContent = '🚀 Start Analysis';
-      }
-    };
-
-    xhr.onerror = () => {
-      showError('A network error occurred. Please try again.');
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/upload');
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) {
+      const pct = Math.round((e.loaded / e.total) * 100);
+      document.getElementById('upload-pct').textContent = pct + '%';
+      document.getElementById('upload-fill').style.width = pct + '%';
+    }
+  };
+  xhr.onload = () => {
+    if (xhr.status === 200) {
+      const data = JSON.parse(xhr.responseText);
+      currentJobId = data.job_id;
+      startTime = Date.now();
+      showProgressCard(data.job_id);
+      pollTimer = setInterval(() => checkStatus(data.job_id), 4000);
+    } else {
+      let msg = 'Upload failed.';
+      try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
+      showError(msg);
       btn.disabled = false;
       btn.textContent = '🚀 Start Analysis';
-    };
-
-    xhr.send(formData);
-  } catch (e) {
-    showError(String(e));
-  }
+    }
+  };
+  xhr.onerror = () => {
+    showError('A network error occurred. Please try again.');
+    btn.disabled = false;
+    btn.textContent = '🚀 Start Analysis';
+  };
+  xhr.send(formData);
 }
 
 // ─── Polling ──────────────────────────────────────────────────────────────
-function startPolling(jobId) {
-  pollTimer = setInterval(() => checkStatus(jobId), 4000);
-}
-
 async function checkStatus(jobId) {
   try {
     const res = await fetch(`/status/${jobId}`);
@@ -433,65 +446,40 @@ async function checkStatus(jobId) {
 
     if (data.status === 'completed') {
       clearInterval(pollTimer);
-      showDone(jobId);
+      showResults(jobId, data.stages || {});
     } else if (data.status === 'failed') {
       clearInterval(pollTimer);
       showError(data.error || 'An unknown error occurred during analysis.');
     }
-  } catch (e) {
-    console.error('Polling error:', e);
-  }
+  } catch (e) { console.error('Poll:', e); }
 }
 
 // ─── Stage Display ────────────────────────────────────────────────────────
 function updateStages(stages) {
   const container = document.getElementById('stages-list');
   let doneCount = 0;
-
   const rows = STAGE_ORDER.map(key => {
     const stage = stages[key] || { status: 'pending' };
-    const label = STAGE_LABELS[key] || key;
-    let dotClass = 'dot-pending';
-    let statusText = 'Pending';
-
-    if (stage.status === 'running') {
-      dotClass = 'dot-running';
-      statusText = 'Running...';
-    } else if (stage.status === 'done') {
-      dotClass = 'dot-done';
-      statusText = 'Done';
-      doneCount++;
-    } else if (stage.status === 'failed') {
-      dotClass = 'dot-failed';
-      statusText = 'Failed';
-    } else if (stage.status === 'skipped') {
-      dotClass = 'dot-skipped';
-      statusText = 'Skipped';
-      doneCount++;
-    }
-
-    return `
-      <div class="flex items-center justify-between py-1.5">
-        <div class="flex items-center">
-          <span class="stage-dot ${dotClass}"></span>
-          <span class="text-slate-700 text-sm">${label}</span>
-        </div>
-        <span class="text-xs text-slate-400">${statusText}</span>
-      </div>`;
+    let dotClass = 'dot-pending', statusText = 'Pending';
+    if (stage.status === 'running')  { dotClass = 'dot-running'; statusText = 'Running...'; }
+    else if (stage.status === 'done')    { dotClass = 'dot-done';    statusText = 'Done'; doneCount++; }
+    else if (stage.status === 'failed')  { dotClass = 'dot-failed';  statusText = 'Failed'; }
+    else if (stage.status === 'skipped') { dotClass = 'dot-skipped'; statusText = 'Skipped'; doneCount++; }
+    return `<div class="flex items-center justify-between py-1.5">
+      <div class="flex items-center">
+        <span class="stage-dot ${dotClass}"></span>
+        <span class="text-slate-700 text-sm">${STAGE_LABELS[key] || key}</span>
+      </div>
+      <span class="text-xs text-slate-400">${statusText}</span>
+    </div>`;
   });
-
   container.innerHTML = rows.join('');
-
-  // Update progress bar
   const pct = Math.max(5, Math.round((doneCount / STAGE_ORDER.length) * 100));
   document.getElementById('overall-fill').style.width = pct + '%';
-
-  // ETA estimate
   if (startTime && doneCount > 0) {
     const elapsed = (Date.now() - startTime) / 1000;
-    const total   = (elapsed / doneCount) * STAGE_ORDER.length;
-    const remain  = Math.max(0, total - elapsed);
-    const mins    = Math.ceil(remain / 60);
+    const remain = Math.max(0, (elapsed / doneCount) * STAGE_ORDER.length - elapsed);
+    const mins = Math.ceil(remain / 60);
     document.getElementById('eta-text').textContent =
       mins > 1 ? `Estimated time remaining: ~${mins} min` : 'Almost done...';
   }
@@ -508,7 +496,78 @@ function updateOverallStatus(status) {
   };
   const [label, cls] = map[status] || ['Unknown', 'bg-slate-100 text-slate-600'];
   el.textContent = label;
-  el.className   = `px-3 py-1 rounded-full text-sm font-semibold ${cls}`;
+  el.className = `px-3 py-1 rounded-full text-sm font-semibold ${cls}`;
+}
+
+// ─── Results Summary ──────────────────────────────────────────────────────
+function showResults(jobId, stages) {
+  document.getElementById('progress-card').classList.add('hidden');
+
+  // Links
+  document.getElementById('view-link').href   = `/view/${jobId}`;
+  document.getElementById('report-link').href = `/report/${jobId}`;
+  document.getElementById('result-job-label').textContent = `Job ID: ${jobId}`;
+
+  // ── QC ──
+  const qcData = tryJSON(stages.qc?.detail) || {};
+  const qcGrid = document.getElementById('qc-grid');
+  const readType = (stages.detect?.detail || '').toUpperCase() || '—';
+  let qcCards = metricCard('Read Type', readType);
+
+  if (qcData.total_reads !== undefined)
+    qcCards += metricCard('Total Reads', Number(qcData.total_reads).toLocaleString());
+  if (qcData.total_bases !== undefined)
+    qcCards += metricCard('Total Bases', fmt(Number(qcData.total_bases)));
+  if (qcData.mean_read_length !== undefined)
+    qcCards += metricCard('Mean Read Length', fmt(Number(qcData.mean_read_length)), 'bp');
+  if (qcData.mean_quality !== undefined)
+    qcCards += metricCard('Mean Quality', qcData.mean_quality, 'Q score');
+  if (qcData.q30_rate !== undefined)
+    qcCards += metricCard('Q30 Rate', qcData.q30_rate + '%');
+  if (qcData.n50 !== undefined)
+    qcCards += metricCard('Read N50', fmt(Number(qcData.n50)), 'bp');
+
+  qcGrid.innerHTML = qcCards;
+
+  // ── Assembly ──
+  const asmData = tryJSON(stages.assembly?.detail) || {};
+  const asmGrid = document.getElementById('asm-grid');
+  let asmCards = '';
+
+  if (asmData.total_contigs !== undefined)
+    asmCards += metricCard('Contigs', asmData.total_contigs.toLocaleString());
+  if (asmData.total_length_bp !== undefined)
+    asmCards += metricCard('Total Length', fmt(asmData.total_length_bp), 'bp');
+  if (asmData.n50_bp !== undefined)
+    asmCards += metricCard('N50', fmt(asmData.n50_bp), 'bp');
+  if (asmData.largest_contig_bp !== undefined)
+    asmCards += metricCard('Largest Contig', fmt(asmData.largest_contig_bp), 'bp');
+  if (asmData.gc_percent !== undefined)
+    asmCards += metricCard('GC Content', asmData.gc_percent + '%');
+
+  asmGrid.innerHTML = asmCards || '<p class="text-slate-400 text-sm col-span-5">Assembly data not available.</p>';
+
+  // ── MLST ──
+  const mlstData = tryJSON(stages.mlst?.detail) || {};
+  document.getElementById('mlst-scheme').textContent = mlstData.scheme || '—';
+  document.getElementById('mlst-st').textContent     = mlstData.st ? 'ST' + mlstData.st : '—';
+  const alleles = mlstData.alleles || [];
+  document.getElementById('mlst-alleles').textContent =
+    alleles.length ? 'Alleles: ' + alleles.join(', ') : '';
+
+  // ── AMR ──
+  const amrData  = tryJSON(stages.amr?.detail) || {};
+  const genes    = amrData.genes || [];
+  const amrPills = document.getElementById('amr-pills');
+  if (genes.length === 0) {
+    amrPills.innerHTML = '<span class="amr-pill none">✅ No AMR genes detected</span>';
+  } else {
+    amrPills.innerHTML = genes.map(g =>
+      `<span class="amr-pill" title="${g.class} · ${g.identity}% identity">${g.gene}</span>`
+    ).join('');
+  }
+
+  document.getElementById('results-card').classList.remove('hidden');
 }
 
 // ─── Card Transitions ─────────────────────────────────────────────────────
@@ -519,25 +578,14 @@ function showProgressCard(jobId) {
   updateStages({});
 }
 
-function showDone(jobId) {
-  document.getElementById('progress-card').classList.add('hidden');
-  const card = document.getElementById('done-card');
-  card.classList.remove('hidden');
-  document.getElementById('report-link').href = `/report/${jobId}`;
-  document.getElementById('overall-fill').style.width = '100%';
-}
-
 function showError(msg) {
   document.getElementById('progress-card').classList.add('hidden');
   document.getElementById('upload-card').classList.add('hidden');
-  const card = document.getElementById('error-card');
-  card.classList.remove('hidden');
+  document.getElementById('error-card').classList.remove('hidden');
   document.getElementById('error-msg').textContent = msg;
 }
 
-function resetAll() {
-  location.reload();
-}
+function resetAll() { location.reload(); }
 </script>
 </body>
 </html>

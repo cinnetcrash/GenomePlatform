@@ -270,13 +270,11 @@ async def job_status(request: Request, job_id: str):
     })
 
 
-@app.get("/report/{job_id}")
-async def download_report(request: Request, job_id: str):
-    """Downloads the completed HTML report."""
+def _get_report_path(job_id: str) -> Path:
+    """Shared validation logic for report endpoints."""
     import re
     if not re.fullmatch(r"[0-9a-f]{32}", job_id):
         raise HTTPException(status_code=400, detail="Invalid job ID.")
-
     job = db.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -287,11 +285,23 @@ async def download_report(request: Request, job_id: str):
         )
     if not job["report_path"]:
         raise HTTPException(status_code=404, detail="Report not found.")
-
     report_path = Path(job["report_path"])
     if not report_path.exists():
         raise HTTPException(status_code=410, detail="Report has been deleted.")
+    return report_path
 
+
+@app.get("/view/{job_id}", response_class=HTMLResponse)
+async def view_report(request: Request, job_id: str):
+    """Opens the completed HTML report inline in the browser."""
+    report_path = _get_report_path(job_id)
+    return HTMLResponse(content=report_path.read_text(encoding="utf-8"))
+
+
+@app.get("/report/{job_id}")
+async def download_report(request: Request, job_id: str):
+    """Downloads the completed HTML report as a file."""
+    report_path = _get_report_path(job_id)
     return FileResponse(
         path=str(report_path),
         media_type="text/html",

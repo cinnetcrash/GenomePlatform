@@ -162,6 +162,57 @@ def stage_qc(job_id: str, fastq: Path, out_dir: Path,
     return result
 
 
+def _assembly_stats(fasta: Path) -> dict[str, Any]:
+    """
+    Computes basic assembly statistics from a FASTA file:
+    contig count, total length, N50, largest contig, GC%.
+    """
+    lengths: list[int] = []
+    gc_count = 0
+    total_bases = 0
+
+    with open(fasta) as fh:
+        seq_chunks: list[str] = []
+        for line in fh:
+            line = line.strip()
+            if line.startswith(">"):
+                if seq_chunks:
+                    s = "".join(seq_chunks)
+                    lengths.append(len(s))
+                    s_up = s.upper()
+                    gc_count += s_up.count("G") + s_up.count("C")
+                    total_bases += len(s)
+                seq_chunks = []
+            else:
+                seq_chunks.append(line)
+        if seq_chunks:
+            s = "".join(seq_chunks)
+            lengths.append(len(s))
+            s_up = s.upper()
+            gc_count += s_up.count("G") + s_up.count("C")
+            total_bases += len(s)
+
+    lengths.sort(reverse=True)
+
+    # N50
+    n50 = 0
+    cumsum = 0
+    half = total_bases / 2
+    for ln in lengths:
+        cumsum += ln
+        if cumsum >= half:
+            n50 = ln
+            break
+
+    return {
+        "total_contigs":    len(lengths),
+        "total_length_bp":  total_bases,
+        "n50_bp":           n50,
+        "largest_contig_bp": lengths[0] if lengths else 0,
+        "gc_percent":       round(gc_count / total_bases * 100, 1) if total_bases else 0,
+    }
+
+
 def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
                    read_type: str) -> Path | None:
     """Assembly stage: MinION → Flye, Illumina → Shovill"""
@@ -194,7 +245,13 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
                   list(asm_dir.glob("contigs.fa")))
     if candidates:
         fasta = candidates[0]
-        db.update_stage(job_id, "assembly", "done", str(fasta))
+        try:
+            stats = _assembly_stats(fasta)
+        except Exception as e:
+            logger.warning("Assembly stats failed: %s", e)
+            stats = {}
+        stats["fasta_path"] = str(fasta)
+        db.update_stage(job_id, "assembly", "done", json.dumps(stats))
         return fasta
 
     db.update_stage(job_id, "assembly", "failed", err[-500:])
