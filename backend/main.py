@@ -110,16 +110,32 @@ def _run_full_pipeline(job_id: str, fastq_path: Path) -> None:
         ai_results = interpret(pipeline_results)
         db.update_stage(job_id, "ai", "done")
 
-        # 3. Primer design
-        db.update_stage(job_id, "primers", "running")
+        # 3. Primer design — skipped if assembly failed or no AMR/AI targets found
         assembly_fasta = pipeline_results.get("assembly_fasta")
         fasta_path = Path(assembly_fasta) if assembly_fasta else None
-        primer_results = design_all_primers(
-            pipeline_results.get("amr", {}),
-            ai_results.get("pcr_targets", []),
-            fasta_path,
-        )
-        db.update_stage(job_id, "primers", "done", f"{len(primer_results)} genes")
+        amr_count = pipeline_results.get("amr", {}).get("count", 0)
+        ai_targets = ai_results.get("pcr_targets", [])
+        has_targets = amr_count > 0 or len(ai_targets) > 0
+        assembly_ok = fasta_path and fasta_path.exists()
+
+        if not assembly_ok:
+            db.update_stage(job_id, "primers", "skipped",
+                            "Assembly did not produce a FASTA — primer design skipped.")
+            primer_results = []
+            logger.warning("[%s] Primer design skipped: no assembly FASTA.", job_id)
+        elif not has_targets:
+            db.update_stage(job_id, "primers", "skipped",
+                            "No AMR genes or AI PCR targets found — primer design skipped.")
+            primer_results = []
+            logger.info("[%s] Primer design skipped: no targets.", job_id)
+        else:
+            db.update_stage(job_id, "primers", "running")
+            primer_results = design_all_primers(
+                pipeline_results.get("amr", {}),
+                ai_targets,
+                fasta_path,
+            )
+            db.update_stage(job_id, "primers", "done", f"{len(primer_results)} genes")
 
         # 4. Generate report
         db.update_stage(job_id, "report", "running")

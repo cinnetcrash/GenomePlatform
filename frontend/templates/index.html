@@ -205,11 +205,18 @@
           <h2 class="text-lg font-semibold text-slate-800">Analysis Complete</h2>
           <p class="text-slate-500 text-sm">Report will be automatically deleted after 24 hours.</p>
         </div>
-        <a id="report-link" href="#" target="_blank"
-           class="py-2.5 px-6 bg-emerald-600 hover:bg-emerald-700
-                  text-white font-semibold rounded-xl transition-colors">
-          📄 Download Report
-        </a>
+        <div class="flex gap-3">
+          <button onclick="resetAll()"
+                  class="py-2.5 px-5 border border-slate-200 hover:border-slate-300
+                         text-slate-600 font-semibold rounded-xl transition-colors text-sm">
+            ↩ New Analysis
+          </button>
+          <a id="report-link" href="#" target="_blank"
+             class="py-2.5 px-6 bg-emerald-600 hover:bg-emerald-700
+                    text-white font-semibold rounded-xl transition-colors">
+            📄 Download Report
+          </a>
+        </div>
       </div>
     </div>
 
@@ -224,8 +231,9 @@
                class="mt-2 text-xs text-slate-500 bg-slate-50 border border-slate-200
                       rounded-lg p-3 whitespace-pre-wrap break-words max-h-40 overflow-y-auto font-mono"></pre>
           <button onclick="resetAll()"
-                  class="mt-3 text-sm text-indigo-600 hover:underline">
-            ↩ Start a new analysis
+                  class="mt-4 py-2.5 px-5 bg-indigo-600 hover:bg-indigo-700
+                         text-white font-semibold rounded-xl transition-colors text-sm">
+            ↩ New Analysis
           </button>
         </div>
       </div>

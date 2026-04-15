@@ -197,10 +197,21 @@ def generate_html_report(job_id: str,
 <body>
 
 <div class="header">
-  <h1>&#x1F9EC; LycianWay &mdash; Genomic Analysis Report</h1>
-  <p>Sample: <strong>{sample}</strong> &nbsp;|&nbsp; Job ID: {job_id} &nbsp;|&nbsp; {now}</p>
-  <p>Read type: {read_type.upper()}</p>
-  <div class="risk-badge">Risk: {risk}</div>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+    <div>
+      <h1>&#x1F9EC; LycianWay &mdash; Genomic Analysis Report</h1>
+      <p>Sample: <strong>{sample}</strong> &nbsp;|&nbsp; Job ID: {job_id} &nbsp;|&nbsp; {now}</p>
+      <p>Read type: {read_type.upper()}</p>
+      <div class="risk-badge">Risk: {risk}</div>
+    </div>
+    <a href="/" style="
+      display:inline-block; margin-top:.4rem; padding:.55rem 1.2rem;
+      background:rgba(255,255,255,0.15); color:white; border-radius:8px;
+      font-size:.85rem; font-weight:600; text-decoration:none;
+      border:1px solid rgba(255,255,255,0.3); white-space:nowrap;
+      backdrop-filter:blur(4px);
+    ">&#x2190; New Analysis</a>
+  </div>
 </div>
 
 <div class="container">
