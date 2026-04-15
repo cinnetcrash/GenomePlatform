@@ -113,37 +113,65 @@ def _run_full_pipeline(job_id: str, fastq_path: Path,
                        fastq_r2: Path | None = None,
                        kraken2_db: Path | None = None,
                        sample_type: str = "auto") -> None:
-    """Runs the full pipeline + AI interpretation in a background thread."""
-    try:
-        logger.info("[%s] Pipeline starting: %s%s", job_id, fastq_path,
-                    f" + {fastq_r2.name}" if fastq_r2 else "")
-        out_dir = RESULTS_DIR / job_id
-        out_dir.mkdir(parents=True, exist_ok=True)
+    """
+    Runs the full pipeline + AI interpretation in a background thread.
+    Even on failure a partial report is generated so the user can see
+    what completed before the error.
+    """
+    logger.info("[%s] Pipeline starting: %s%s", job_id, fastq_path,
+                f" + {fastq_r2.name}" if fastq_r2 else "")
+    out_dir = RESULTS_DIR / job_id
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Genomic pipeline
+    pipeline_results: dict = {}
+    ai_results:       dict = {}
+    job_error:        str | None = None
+
+    # ── 1. Genomic pipeline ───────────────────────────────────────────────────
+    try:
         pipeline_results = run_pipeline(job_id, fastq_path,
                                         fastq_r2=fastq_r2,
                                         kraken2_db=kraken2_db,
                                         sample_type=sample_type)
         if pipeline_results.get("error"):
-            return
+            job_error = pipeline_results["error"]
+    except Exception as exc:
+        logger.error("[%s] Pipeline error: %s", job_id, exc, exc_info=True)
+        job_error = str(exc)
 
-        # 2. AI interpretation
-        db.update_stage(job_id, "ai", "running")
-        ai_results = interpret(pipeline_results)
-        db.update_stage(job_id, "ai", "done")
+    # ── 2. AI interpretation (skip only if pipeline produced nothing) ─────────
+    if pipeline_results and not pipeline_results.get("error"):
+        try:
+            db.update_stage(job_id, "ai", "running")
+            ai_results = interpret(pipeline_results)
+            db.update_stage(job_id, "ai", "done")
+        except Exception as exc:
+            logger.error("[%s] AI error: %s", job_id, exc, exc_info=True)
+            ai_results = {
+                "summary": f"AI interpretation failed: {exc}",
+                "risk_level": "UNKNOWN",
+            }
+            db.update_stage(job_id, "ai", "failed", str(exc))
+            # Not a fatal error — continue to report
 
-        # 3. Generate report
+    # ── 3. Generate report (always, even on partial/failed pipelines) ─────────
+    try:
         db.update_stage(job_id, "report", "running")
-        html = generate_html_report(job_id, pipeline_results, ai_results)
+        html = generate_html_report(job_id, pipeline_results, ai_results,
+                                    job_error=job_error)
         report_path = save_report(job_id, html, out_dir)
         db.update_stage(job_id, "report", "done")
 
-        db.update_job_status(job_id, "completed", report_path=str(report_path))
-        logger.info("[%s] Completed. Report: %s", job_id, report_path)
+        final_status = "failed" if job_error else "completed"
+        db.update_job_status(job_id, final_status,
+                             report_path=str(report_path),
+                             error=job_error)
+        logger.info("[%s] %s. Report: %s", job_id,
+                    "Failed (partial report)" if job_error else "Completed",
+                    report_path)
 
     except Exception as exc:
-        logger.error("[%s] Background error: %s", job_id, exc, exc_info=True)
+        logger.error("[%s] Report generation error: %s", job_id, exc, exc_info=True)
         db.update_job_status(job_id, "failed", error=str(exc))
 
 
@@ -344,7 +372,7 @@ def _get_report_path(job_id: str) -> Path:
     job = db.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
-    if job["status"] != "completed":
+    if job["status"] not in ("completed", "failed"):
         raise HTTPException(
             status_code=202,
             detail=f"Analysis not yet complete (status: {job['status']})."

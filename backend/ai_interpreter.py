@@ -88,6 +88,19 @@ def interpret(results: dict[str, Any]) -> dict[str, Any]:
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
+
+        if not message.content:
+            logger.error("Claude API returned empty content (stop_reason=%s)", message.stop_reason)
+            return {
+                "species_prediction": "N/A",
+                "clinical_significance": f"AI returned no content (stop_reason: {message.stop_reason}). The model may have refused or been rate-limited.",
+                "resistance_profile": "",
+                "treatment_implications": "",
+                "epidemiology": "",
+                "risk_level": "UNKNOWN",
+                "summary": "AI interpretation returned empty content.",
+            }
+
         raw = message.content[0].text.strip()
 
         # Strip markdown code fences if present (```json ... ```)

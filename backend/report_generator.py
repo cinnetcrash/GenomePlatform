@@ -103,6 +103,25 @@ def _assembly_qc_section(qc_checks: list[dict]) -> str:
            + "\n".join(cards) + "</div>"
 
 
+def _error_banner(error: str) -> str:
+    """Shows a red error banner with the failure reason at the top of the report."""
+    if not error:
+        return ""
+    # Truncate very long tracebacks for display
+    display = error if len(error) <= 600 else error[:600] + "…"
+    return (
+        "<div class='section'><div class='section-body' style='"
+        "background:#fef2f2;border-left:4px solid #dc2626;padding:1rem 1.2rem;"
+        "border-radius:0 8px 8px 0'>"
+        "<strong style='color:#dc2626'>&#x274C; Analysis Failed — Partial Results</strong><br>"
+        "<span style='font-size:.85rem;color:#7f1d1d'>The pipeline encountered an error. "
+        "Partial results collected before the failure are shown below.</span>"
+        f"<pre style='margin-top:.8rem;background:#fff5f5;padding:.8rem;border-radius:6px;"
+        f"font-size:.78rem;color:#991b1b;overflow-x:auto;white-space:pre-wrap'>{display}</pre>"
+        "</div></div>"
+    )
+
+
 def _context_banner(gctx: dict) -> str:
     """Shows a coloured banner when bacterial steps were skipped."""
     if not gctx or not gctx.get("skip_bacterial"):
@@ -345,7 +364,8 @@ def _amr_table(genes: list[dict]) -> str:
 
 def generate_html_report(job_id: str,
                           pipeline_results: dict[str, Any],
-                          ai_results: dict[str, Any]) -> str:
+                          ai_results: dict[str, Any],
+                          job_error: str | None = None) -> str:
     """Returns the complete HTML report as a string."""
 
     sample      = pipeline_results.get("sample_name", "Unknown")
@@ -462,6 +482,8 @@ def generate_html_report(job_id: str,
 </div>
 
 <div class="container">
+
+  {_error_banner(job_error)}
 
   {_context_banner(gctx)}
 

@@ -748,6 +748,16 @@ async function pollJob(jobId, t0, timer) {
       clearInterval(timer);
       const etaEl = document.getElementById(`eta-${jobId}`);
       if (etaEl) etaEl.textContent = `Error: ${data.error || 'Unknown error'}`;
+      // If a partial report was generated, show report buttons anyway
+      if (data.has_report) {
+        const btns = document.getElementById(`result-btns-${jobId}`);
+        if (btns) {
+          btns.classList.remove('hidden');
+          // Add a warning label to the view-report button
+          const viewBtn = btns.querySelector('a[href*="/view/"]');
+          if (viewBtn) viewBtn.textContent = '⚠️ View Partial Report';
+        }
+      }
     }
   } catch(e) {}
 }
