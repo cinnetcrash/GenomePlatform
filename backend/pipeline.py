@@ -876,6 +876,267 @@ def stage_bandage(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
         return {"error": "Bandage timed out."}
 
 
+# ─── Read Depth / Coverage ────────────────────────────────────────────────────
+
+def stage_coverage(job_id: str, fasta: Path, out_dir: Path,
+                   read_type: str,
+                   fastq_r1: Path,
+                   fastq_r2: Path | None = None) -> dict[str, Any]:
+    """
+    Maps reads back to the assembly with minimap2, then computes per-base
+    coverage with samtools.  Returns mean/median depth and coverage breadth.
+    """
+    db.update_stage(job_id, "coverage", "running", "Mapping reads to assembly…")
+    cov_dir = out_dir / "coverage"
+    cov_dir.mkdir(exist_ok=True)
+
+    bam = cov_dir / "reads_vs_assembly.bam"
+    preset = "map-ont" if read_type == "minion" else "sr"
+
+    # ── minimap2 → samtools sort ───────────────────────────────────────────
+    mm2_cmd = [
+        "minimap2", "-ax", preset,
+        "-t", str(MAX_THREADS),
+        sanitize_path(fasta),
+        sanitize_path(fastq_r1),
+    ]
+    if fastq_r2:
+        mm2_cmd.append(sanitize_path(fastq_r2))
+
+    import os
+    env = os.environ.copy()
+    env["PATH"] = str(CONDA_BASE / "envs" / "analiz" / "bin") + ":" + env["PATH"]
+
+    try:
+        mm2 = subprocess.Popen(mm2_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               cwd=str(cov_dir), env=env)
+        sort = subprocess.Popen(
+            ["samtools", "sort", "-@", str(MAX_THREADS), "-o", str(bam)],
+            stdin=mm2.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=str(cov_dir), env=env,
+        )
+        mm2.stdout.close()
+        _, sort_err = sort.communicate(timeout=3600)
+        mm2.wait(timeout=60)
+    except Exception as e:
+        msg = f"minimap2/samtools sort failed: {e}"
+        logger.warning("[%s] Coverage: %s", job_id, msg)
+        db.update_stage(job_id, "coverage", "failed", msg)
+        return {"error": msg}
+
+    if not bam.exists() or bam.stat().st_size == 0:
+        msg = "BAM file not produced"
+        db.update_stage(job_id, "coverage", "failed", msg)
+        return {"error": msg}
+
+    # ── samtools index ─────────────────────────────────────────────────────
+    subprocess.run(["samtools", "index", str(bam)], env=env, cwd=str(cov_dir),
+                   capture_output=True)
+
+    # ── samtools coverage → aggregate stats ───────────────────────────────
+    rc_cov = subprocess.run(
+        ["samtools", "coverage", str(bam)],
+        capture_output=True, text=True, env=env, cwd=str(cov_dir),
+    )
+
+    result: dict[str, Any] = {}
+    if rc_cov.returncode == 0 and rc_cov.stdout:
+        depths, covs, lengths = [], [], []
+        for line in rc_cov.stdout.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.split("\t")
+            if len(parts) < 7:
+                continue
+            try:
+                length    = int(parts[2])
+                covbases  = int(parts[3])
+                depth     = float(parts[6])
+                lengths.append(length)
+                depths.append(depth * length)
+                covs.append(covbases)
+            except (ValueError, IndexError):
+                continue
+
+        total_len = sum(lengths)
+        if total_len > 0:
+            mean_depth   = round(sum(depths) / total_len, 1)
+            breadth_1x   = round(sum(covs) / total_len * 100, 1)
+            result = {
+                "mean_depth":      mean_depth,
+                "breadth_1x_pct":  breadth_1x,
+                "total_length_bp": total_len,
+            }
+            logger.info("[%s] Coverage: %.1fx mean depth, %.1f%% at ≥1x",
+                        job_id, mean_depth, breadth_1x)
+        else:
+            result = {"error": "No coverage data computed"}
+    else:
+        result = {"error": rc_cov.stderr[:300] if rc_cov.stderr else "samtools coverage failed"}
+
+    db.update_stage(job_id, "coverage", "done", json.dumps(result))
+    return result
+
+
+# ─── Serotyping ───────────────────────────────────────────────────────────────
+
+# Maps genus (lowercase) → (tool_name, conda_env)
+_SEROTYPE_MAP = {
+    "escherichia": ("ectyper",   "analiz"),
+    "salmonella":  ("sistr",     "sistr"),
+    "klebsiella":  ("kleborate", "kleborate"),
+}
+
+
+def _detect_serotype_tool(kraken2_results: dict | None) -> tuple[str | None, str | None, str]:
+    """
+    Inspects the Kraken2 top hit to decide which serotyping tool to run.
+    Returns (tool_name, conda_env, detected_species) or (None, None, "").
+    """
+    if not kraken2_results:
+        return None, None, ""
+    top_taxa = kraken2_results.get("top_taxa") or []
+    if not top_taxa:
+        return None, None, ""
+    top_name = top_taxa[0].get("name", "")
+    genus = top_name.split()[0].lower() if top_name else ""
+    tool, env = _SEROTYPE_MAP.get(genus, (None, None))
+    return tool, env, top_name
+
+
+def _run_ectyper(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
+    eco_dir = out_dir / "serotyping" / "ectyper"
+    eco_dir.mkdir(parents=True, exist_ok=True)
+    cmd = ["ectyper", "-i", sanitize_path(fasta), "-o", str(eco_dir),
+           "--cores", str(MAX_THREADS)]
+    rc, out, err = _run(cmd, eco_dir, timeout=1800, env_name="analiz")
+
+    tsv = eco_dir / "output.tsv"
+    if not tsv.exists():
+        # ectyper sometimes writes to a subdirectory
+        hits = list(eco_dir.rglob("output.tsv"))
+        if hits:
+            tsv = hits[0]
+
+    result: dict[str, Any] = {"tool": "ECTyper"}
+    if tsv.exists():
+        lines = tsv.read_text().splitlines()
+        if len(lines) >= 2:
+            headers = lines[0].split("\t")
+            vals    = lines[1].split("\t")
+            row = dict(zip(headers, vals))
+            result.update({
+                "serotype":   row.get("Serotype", row.get("O-type", "—")),
+                "o_type":     row.get("O-type", "—"),
+                "h_type":     row.get("H-type", "—"),
+                "quality":    row.get("QC", row.get("Quality", "—")),
+                "evidence":   row.get("Evidence", "—"),
+            })
+    elif rc != 0:
+        result["error"] = err[:300]
+    return result
+
+
+def _run_sistr(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
+    sis_dir = out_dir / "serotyping" / "sistr"
+    sis_dir.mkdir(parents=True, exist_ok=True)
+    json_out = sis_dir / "sistr_results.json"
+    cmd = ["sistr", "-i", sanitize_path(fasta), "assembly",
+           "-f", "json", "-o", str(json_out),
+           "--qc", "-t", str(MAX_THREADS)]
+    rc, out, err = _run(cmd, sis_dir, timeout=1800, env_name="sistr")
+
+    result: dict[str, Any] = {"tool": "SISTR"}
+    if json_out.exists():
+        try:
+            data = json.loads(json_out.read_text())
+            if isinstance(data, list):
+                data = data[0]
+            result.update({
+                "serovar":       data.get("serovar", "—"),
+                "serogroup":     data.get("serogroup", "—"),
+                "h1":            data.get("h1", "—"),
+                "h2":            data.get("h2", "—"),
+                "o_antigen":     data.get("o_antigen", "—"),
+                "cgmlst_st":     data.get("cgmlst_ST", "—"),
+                "qc_status":     data.get("qc_status", "—"),
+            })
+        except Exception as e:
+            result["error"] = f"JSON parse error: {e}"
+    elif rc != 0:
+        result["error"] = err[:300]
+    return result
+
+
+def _run_kleborate(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
+    kleb_dir = out_dir / "serotyping" / "kleborate"
+    kleb_dir.mkdir(parents=True, exist_ok=True)
+    tsv_out = kleb_dir / "kleborate.txt"
+    cmd = ["kleborate", "--all", "-a", sanitize_path(fasta), "-o", str(tsv_out)]
+    rc, out, err = _run(cmd, kleb_dir, timeout=1800, env_name="kleborate")
+
+    result: dict[str, Any] = {"tool": "Kleborate"}
+    if tsv_out.exists():
+        lines = tsv_out.read_text().splitlines()
+        if len(lines) >= 2:
+            headers = lines[0].split("\t")
+            vals    = lines[1].split("\t")
+            row = dict(zip(headers, vals))
+            result.update({
+                "species":        row.get("species", "—"),
+                "st":             row.get("ST", "—"),
+                "virulence_score":row.get("virulence_score", "—"),
+                "resistance_score":row.get("resistance_score", "—"),
+                "o_type":         row.get("O_locus", "—"),
+                "k_type":         row.get("K_locus", "—"),
+            })
+    elif rc != 0:
+        result["error"] = err[:300]
+    return result
+
+
+def stage_serotyping(job_id: str, fasta: Path, out_dir: Path,
+                     kraken2_results: dict | None) -> dict[str, Any]:
+    """
+    Auto-selects and runs the appropriate serotyping tool based on Kraken2 genus:
+      Escherichia → ECTyper   (O:H antigen)
+      Salmonella  → SISTR     (serovar prediction)
+      Klebsiella  → Kleborate (K/O locus + virulence/resistance scoring)
+    Skips gracefully for all other genera.
+    """
+    tool, env, species = _detect_serotype_tool(kraken2_results)
+    if not tool:
+        msg = (f"Serotyping skipped — genus not in supported list "
+               f"(supported: {', '.join(g.capitalize() for g in _SEROTYPE_MAP)}).")
+        db.update_stage(job_id, "serotyping", "skipped", msg)
+        return {"skipped": True, "reason": msg}
+
+    db.update_stage(job_id, "serotyping", "running",
+                    f"Running {tool} for {species}…")
+    logger.info("[%s] Serotyping: tool=%s species=%s", job_id, tool, species)
+
+    try:
+        if tool == "ectyper":
+            result = _run_ectyper(job_id, fasta, out_dir)
+        elif tool == "sistr":
+            result = _run_sistr(job_id, fasta, out_dir)
+        elif tool == "kleborate":
+            result = _run_kleborate(job_id, fasta, out_dir)
+        else:
+            result = {"skipped": True, "reason": f"Unknown tool: {tool}"}
+    except Exception as exc:
+        result = {"error": str(exc)}
+
+    result["detected_species"] = species
+    db.update_stage(job_id, "serotyping", "done", json.dumps({
+        "tool": result.get("tool", tool),
+        "detected_species": species,
+        "serotype": result.get("serotype") or result.get("serovar") or result.get("st", "—"),
+    }))
+    logger.info("[%s] Serotyping done: %s", job_id, result)
+    return result
+
+
 # ─── MLST ─────────────────────────────────────────────────────────────────────
 
 def stage_mlst(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
@@ -1043,15 +1304,29 @@ def stage_abricate(job_id: str, fasta: Path, out_dir: Path,
         else:
             logger.warning("[%s] Abricate VFDB failed: %s", job_id, err_v[:200])
 
+    # Always run PlasmidFinder
+    db.update_stage(job_id, "abricate", "running",
+                    "Running abricate --db plasmidfinder")
+    pf_tsv = abr_dir / "plasmidfinder.tsv"
+    cmd_pf = ["abricate", "--db", "plasmidfinder", "--quiet", sanitize_path(fasta)]
+    rc, out_pf, err_pf = _run(cmd_pf, abr_dir, timeout=600, env_name="analiz")
+    if rc == 0:
+        pf_tsv.write_text(out_pf)
+    pf_hits = _parse_abricate_tsv(pf_tsv, "PlasmidFinder") if pf_tsv.exists() else []
+    logger.info("[%s] Abricate PlasmidFinder: %d hits", job_id, len(pf_hits))
+
     result = {
-        "genes":      all_genes,
-        "count":      len(all_genes),
-        "ran_vfdb":   run_vfdb,
-        "top_genus":  top_genus,
+        "genes":               all_genes,
+        "count":               len(all_genes),
+        "ran_vfdb":            run_vfdb,
+        "top_genus":           top_genus,
+        "plasmidfinder":       pf_hits,
+        "plasmidfinder_count": len(pf_hits),
     }
     db.update_stage(job_id, "abricate", "done",
                     json.dumps({"count": len(all_genes), "ran_vfdb": run_vfdb,
-                                "top_genus": top_genus}))
+                                "top_genus": top_genus,
+                                "plasmidfinder_count": len(pf_hits)}))
     return result
 
 
@@ -1433,6 +1708,16 @@ def run_pipeline(job_id: str, fastq_path: Path,
             logger.warning("[%s] Bandage skipped: %s", job_id, band_err)
             results["bandage"] = {"error": str(band_err)}
 
+        # 5b. Coverage (always — maps filtered reads back to assembly)
+        try:
+            results["coverage"] = stage_coverage(
+                job_id, fasta, out_dir, read_type,
+                fastq_r1=filtered_r1, fastq_r2=filtered_r2,
+            )
+        except Exception as cov_err:
+            logger.warning("[%s] Coverage skipped: %s", job_id, cov_err)
+            results["coverage"] = {"error": str(cov_err)}
+
         # 6. QUAST (always)
         try:
             results["quast"] = stage_quast(job_id, fasta, out_dir)
@@ -1505,7 +1790,16 @@ def run_pipeline(job_id: str, fastq_path: Path,
                 results["mobsuite"] = {"plasmids": [], "plasmid_count": 0,
                                        "error": str(mob_err)}
 
-        # 13. Annotation (optional — continue even if it fails)
+        # 13. Serotyping (auto-detected from Kraken2 genus — skip if not applicable)
+        try:
+            results["serotyping"] = stage_serotyping(
+                job_id, fasta, out_dir, results.get("kraken2")
+            )
+        except Exception as sero_err:
+            logger.warning("[%s] Serotyping skipped: %s", job_id, sero_err)
+            results["serotyping"] = {"error": str(sero_err)}
+
+        # 14. Annotation (optional — continue even if it fails)
         try:
             results["annotation"] = str(
                 stage_annotation(job_id, fasta, out_dir, sample_name)
@@ -1542,7 +1836,7 @@ def stage_qc(job_id: str, fastq: Path, out_dir: Path,
              fastq_r2: Path | None = None) -> tuple[dict[str, Any], Path, Path | None]:
     """
     QC stage:
-    - MinION  → NanoPlot  (returns original fastq as filtered path)
+    - MinION  → NanoPlot (stats) + Filtlong (filter by length/quality)
     - Illumina SE → fastp single-end
     - Illumina PE → fastp paired-end
     Returns (metrics_dict, filtered_r1_path, filtered_r2_path_or_None)
@@ -1553,6 +1847,7 @@ def stage_qc(job_id: str, fastq: Path, out_dir: Path,
     result: dict[str, Any] = {}
 
     if read_type == "minion":
+        # ── NanoPlot stats ─────────────────────────────────────────────────
         cmd = [
             "NanoPlot", "--fastq", sanitize_path(fastq),
             "--outdir", str(qc_dir),
@@ -1571,8 +1866,44 @@ def stage_qc(job_id: str, fastq: Path, out_dir: Path,
                     result["total_bases"] = line.split(":")[-1].strip()
                 elif "N50" in line:
                     result["n50"] = line.split(":")[-1].strip()
+
+        # ── Filtlong — filter reads for downstream assembly ─────────────────
+        filt_fastq = qc_dir / "filtered.fastq.gz"
+        fl_cmd = [
+            "filtlong",
+            "--min_length",    "1000",   # discard reads < 1 kb
+            "--min_mean_q",    "8",      # discard reads with mean Phred < Q8
+            "--target_bases",  "500000000",  # keep top 500 Mb (≈100x for 5 Mb genome)
+            sanitize_path(fastq),
+        ]
+        # Filtlong writes to stdout — capture and gzip-pipe manually
+        import os, gzip as _gz
+        fl_env = os.environ.copy()
+        fl_env["PATH"] = (str(CONDA_BASE / "envs" / "analiz" / "bin") + ":"
+                          + fl_env["PATH"])
+        try:
+            proc = subprocess.Popen(
+                fl_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                cwd=str(qc_dir), env=fl_env,
+            )
+            with _gz.open(filt_fastq, "wb") as fout:
+                fout.write(proc.stdout.read())
+            proc.wait(timeout=3600)
+            if filt_fastq.exists() and filt_fastq.stat().st_size > 0:
+                result["filtlong"] = "applied (min_length=1000, min_mean_q=8)"
+                logger.info("[%s] Filtlong done: %s bytes", job_id, filt_fastq.stat().st_size)
+                filtered_fastq = filt_fastq
+            else:
+                logger.warning("[%s] Filtlong produced no output — using raw reads", job_id)
+                result["filtlong"] = "no output — using raw reads"
+                filtered_fastq = fastq
+        except Exception as fl_err:
+            logger.warning("[%s] Filtlong failed: %s — using raw reads", job_id, fl_err)
+            result["filtlong"] = f"skipped ({fl_err})"
+            filtered_fastq = fastq
+
         db.update_stage(job_id, "qc", "done", json.dumps(result))
-        return result, fastq, None
+        return result, filtered_fastq, None
 
     else:  # Illumina (SE or PE)
         json_out  = qc_dir / "fastp.json"

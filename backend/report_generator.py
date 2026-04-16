@@ -406,6 +406,141 @@ def _abricate_section(abricate: dict) -> str:
     return "\n".join(sections)
 
 
+def _coverage_section(cov: dict) -> str:
+    """Renders read-depth / coverage breadth metrics."""
+    if not cov:
+        return "<p style='color:#6b7280'>Coverage analysis was not run.</p>"
+    if cov.get("error"):
+        return f"<p style='color:#6b7280'>Coverage: {cov['error']}</p>"
+
+    depth  = cov.get("mean_depth", "—")
+    bread  = cov.get("breadth_1x_pct", "—")
+    tlen   = cov.get("total_length_bp", 0)
+
+    try:
+        depth_f = float(depth)
+        depth_color = "#22c55e" if depth_f >= 20 else ("#f59e0b" if depth_f >= 10 else "#ef4444")
+        depth_label = f"{depth_f:.1f}x"
+    except (ValueError, TypeError):
+        depth_color, depth_label = "#6b7280", str(depth)
+
+    try:
+        bread_f = float(bread)
+        bread_color = "#22c55e" if bread_f >= 90 else ("#f59e0b" if bread_f >= 70 else "#ef4444")
+        bread_label = f"{bread_f:.1f}%"
+    except (ValueError, TypeError):
+        bread_color, bread_label = "#6b7280", str(bread)
+
+    try:
+        tlen_label = f"{int(tlen)/1e6:.2f} Mb"
+    except (ValueError, TypeError):
+        tlen_label = str(tlen)
+
+    return (
+        f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem'>"
+        f"<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:1rem'>"
+        f"<div style='font-size:.72rem;color:#64748b;text-transform:uppercase'>Mean Depth</div>"
+        f"<div style='font-size:1.5rem;font-weight:700;color:{depth_color}'>{depth_label}</div>"
+        f"<div style='font-size:.72rem;color:#94a3b8;margin-top:.2rem'>≥20x recommended</div></div>"
+        f"<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:1rem'>"
+        f"<div style='font-size:.72rem;color:#64748b;text-transform:uppercase'>Breadth ≥1x</div>"
+        f"<div style='font-size:1.5rem;font-weight:700;color:{bread_color}'>{bread_label}</div>"
+        f"<div style='font-size:.72rem;color:#94a3b8;margin-top:.2rem'>% assembly covered</div></div>"
+        f"<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:1rem'>"
+        f"<div style='font-size:.72rem;color:#64748b;text-transform:uppercase'>Assembly Length</div>"
+        f"<div style='font-size:1.5rem;font-weight:700;color:#1e40af'>{tlen_label}</div>"
+        f"<div style='font-size:.72rem;color:#94a3b8;margin-top:.2rem'>mapped target</div></div>"
+        f"</div>"
+    )
+
+
+def _serotyping_section(sero: dict) -> str:
+    """Renders serotyping results (ECTyper / SISTR / Kleborate)."""
+    if not sero:
+        return ""
+    if sero.get("skipped"):
+        return f"<p style='color:#6b7280'>{sero.get('reason','Serotyping skipped.')}</p>"
+    if sero.get("error"):
+        return f"<p style='color:#ef4444'>Serotyping error: {sero['error']}</p>"
+
+    tool    = sero.get("tool", "")
+    species = sero.get("detected_species", "")
+
+    header = (f"<p style='margin-bottom:1rem;font-size:.88rem;color:#374151'>"
+              f"Tool: <strong>{tool}</strong> &nbsp;|&nbsp; Detected: <em>{species}</em></p>")
+
+    cards = []
+
+    if tool == "ECTyper":
+        items = [
+            ("Serotype",  sero.get("serotype", "—")),
+            ("O Antigen", sero.get("o_type",   "—")),
+            ("H Antigen", sero.get("h_type",   "—")),
+            ("Quality",   sero.get("quality",  "—")),
+        ]
+    elif tool == "SISTR":
+        items = [
+            ("Serovar",     sero.get("serovar",   "—")),
+            ("Serogroup",   sero.get("serogroup", "—")),
+            ("H1 Antigen",  sero.get("h1",        "—")),
+            ("H2 Antigen",  sero.get("h2",        "—")),
+            ("O Antigen",   sero.get("o_antigen", "—")),
+            ("cgMLST ST",   sero.get("cgmlst_st", "—")),
+            ("QC Status",   sero.get("qc_status", "—")),
+        ]
+    elif tool == "Kleborate":
+        items = [
+            ("Species",          sero.get("species",         "—")),
+            ("ST",               sero.get("st",              "—")),
+            ("K Locus",          sero.get("k_type",          "—")),
+            ("O Locus",          sero.get("o_type",          "—")),
+            ("Virulence Score",  sero.get("virulence_score", "—")),
+            ("Resistance Score", sero.get("resistance_score","—")),
+        ]
+    else:
+        items = [(k, v) for k, v in sero.items()
+                 if k not in ("tool", "detected_species") and not k.startswith("_")]
+
+    for label, val in items:
+        if val and val != "—":
+            cards.append(
+                f"<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;"
+                f"padding:.9rem 1rem'>"
+                f"<div style='font-size:.72rem;color:#64748b;text-transform:uppercase;"
+                f"letter-spacing:.04em'>{label}</div>"
+                f"<div style='font-size:1.1rem;font-weight:700;color:#1e40af;margin-top:.15rem'>{val}</div>"
+                f"</div>"
+            )
+
+    grid = (f"<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));"
+            f"gap:.75rem'>" + "".join(cards) + "</div>") if cards else ""
+
+    return header + grid
+
+
+def _plasmidfinder_section(pf_hits: list[dict]) -> str:
+    """Renders PlasmidFinder (Abricate) results."""
+    if not pf_hits:
+        return "<p style='color:#22c55e'>&#x2705; No plasmid replicons detected (PlasmidFinder).</p>"
+    rows = [
+        "<table><thead><tr>"
+        "<th>Replicon</th><th>Product</th><th>% Coverage</th><th>% Identity</th><th>Accession</th>"
+        "</tr></thead><tbody>"
+    ]
+    for g in pf_hits:
+        rows.append(
+            f"<tr>"
+            f"<td><strong>{g.get('gene','')}</strong></td>"
+            f"<td style='font-size:.82rem'>{g.get('product','')}</td>"
+            f"<td>{g.get('coverage','')}</td>"
+            f"<td>{g.get('identity','')}</td>"
+            f"<td><code style='font-size:.78rem'>{g.get('accession','')}</code></td>"
+            f"</tr>"
+        )
+    rows.append("</tbody></table>")
+    return "\n".join(rows)
+
+
 def _amr_table(genes: list[dict]) -> str:
     if not genes:
         return "<p style='color:#22c55e'>&#x2705; No AMR genes detected.</p>"
@@ -447,6 +582,9 @@ def generate_html_report(job_id: str,
     kraken2     = pipeline_results.get("kraken2") or {}
     gctx        = pipeline_results.get("genomic_context") or {}
     host_depl   = pipeline_results.get("host_depletion") or {}
+    coverage    = pipeline_results.get("coverage") or {}
+    serotyping  = pipeline_results.get("serotyping") or {}
+    pf_hits     = abricate.get("plasmidfinder", [])
 
     risk        = ai_results.get("risk_level", "UNKNOWN").upper()
     risk_color, risk_bg = RISK_COLORS.get(risk, RISK_COLORS["UNKNOWN"])
@@ -590,6 +728,12 @@ def generate_html_report(job_id: str,
   <!-- Assembly Graph -->
   {_bandage_section(bandage)}
 
+  <!-- Coverage -->
+  <div class="section">
+    <div class="section-title">&#x1F4CA; Read Depth &amp; Coverage</div>
+    <div class="section-body">{_coverage_section(coverage)}</div>
+  </div>
+
   <!-- QUAST -->
   <div class="section">
     <div class="section-title">&#x1F4D0; Assembly Quality (QUAST)</div>
@@ -641,6 +785,22 @@ def generate_html_report(job_id: str,
     <div class="section-title">&#x1F48A; Mobile Genetic Elements (MOB-Suite)</div>
     <div class="section-body">
       {_mobsuite_section(mobsuite)}
+    </div>
+  </div>
+
+  <!-- PlasmidFinder -->
+  <div class="section">
+    <div class="section-title">&#x1F9EC; Plasmid Replicons (PlasmidFinder / Abricate)</div>
+    <div class="section-body">
+      {_plasmidfinder_section(pf_hits)}
+    </div>
+  </div>
+
+  <!-- Serotyping -->
+  <div class="section">
+    <div class="section-title">&#x1F9EC; Serotyping</div>
+    <div class="section-body">
+      {_serotyping_section(serotyping)}
     </div>
   </div>
 

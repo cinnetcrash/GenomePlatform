@@ -18,10 +18,14 @@ for d in [UPLOAD_DIR, RESULTS_DIR, LOGS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # === CPU Budget ===
+# Leave 2 cores free for the OS and server process to stay responsive.
+# On a 16-core machine: MAX_THREADS=14, ASSEMBLY_THREADS=14.
+# On smaller machines (≤4 cores) we leave only 1 core free.
 _total_cpus      = multiprocessing.cpu_count()
-MAX_THREADS      = max(1, math.floor(_total_cpus * 0.80))   # general cap: 80%
-ASSEMBLY_THREADS = max(1, math.floor(_total_cpus * 0.85))   # assembly stages: 85%
-print(f"[config] CPU budget: {MAX_THREADS}/{_total_cpus} threads (80%) | assembly: {ASSEMBLY_THREADS} (85%)")
+_reserve         = 2 if _total_cpus > 4 else 1
+MAX_THREADS      = max(1, _total_cpus - _reserve)
+ASSEMBLY_THREADS = max(1, _total_cpus - _reserve)
+print(f"[config] CPU budget: {MAX_THREADS}/{_total_cpus} threads (reserve {_reserve})")
 
 # === Assembly Tuning ===
 # Shovill assembler backend: "spades" (accurate) or "megahit" (2-3x faster, slightly lower quality)

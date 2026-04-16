@@ -82,8 +82,9 @@ templates = Jinja2Templates(directory=str(FRONTEND_DIR / "templates"))
 @app.on_event("startup")
 async def startup():
     db.init_db()
+    stale = db.cancel_stale_jobs()   # clear jobs orphaned by a crash / restart
     cleanup.start_cleanup_thread()
-    logger.info("LycianWay started.")
+    logger.info("LycianWay started. (stale jobs cancelled: %d)", stale)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

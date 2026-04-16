@@ -540,18 +540,20 @@ const STAGE_LABELS = {
   kraken2:        "🦠 Taxonomic Classification (Kraken2)",
   host_depletion: "🧹 Host Read Depletion",
   qc:             "📊 Quality Control (QC)",
-  assembly:   "🔧 Genome Assembly",
-  bandage:    "🗺 Assembly Graph (Bandage)",
-  quast:      "📐 Assembly QC (QUAST)",
-  checkm2:    "✅ Genome Completeness (CheckM2)",
-  checkv:     "🦠 Viral Quality (CheckV)",
-  mlst:       "🔬 MLST Typing",
-  amr:        "💊 AMR Gene Detection",
-  abricate:   "🧫 Virulence & Resistance (Abricate)",
-  mobsuite:   "🔵 Mobile Elements (MOB-Suite)",
-  annotation: "📝 Annotation (Bakta)",
-  ai:         "🤖 AI Clinical Interpretation",
-  report:     "📄 Report Generation",
+  assembly:       "🔧 Genome Assembly",
+  bandage:        "🗺 Assembly Graph (Bandage)",
+  coverage:       "📈 Read Depth & Coverage",
+  quast:          "📐 Assembly QC (QUAST)",
+  checkm2:        "✅ Genome Completeness (CheckM2)",
+  checkv:         "🦠 Viral Quality (CheckV)",
+  mlst:           "🔬 MLST Typing",
+  amr:            "💊 AMR Gene Detection",
+  abricate:       "🧫 Virulence & Resistance (Abricate)",
+  mobsuite:       "🔵 Mobile Elements (MOB-Suite)",
+  serotyping:     "🏷 Serotyping",
+  annotation:     "📝 Annotation (Bakta)",
+  ai:             "🤖 AI Clinical Interpretation",
+  report:         "📄 Report Generation",
 };
 const STAGE_ORDER = Object.keys(STAGE_LABELS);
 
@@ -1303,8 +1305,10 @@ function renderStageDetail(key, parsed, rawText) {
       case 'mlst':     return _renderMlst(parsed);
       case 'amr':      return _renderAmr(parsed);
       case 'abricate': return _renderAbricate(parsed);
-      case 'mobsuite': return _renderMobsuite(parsed);
-      case 'bandage':  return _renderBandage(parsed);
+      case 'mobsuite':    return _renderMobsuite(parsed);
+      case 'bandage':     return _renderBandage(parsed);
+      case 'coverage':    return _renderCoverage(parsed);
+      case 'serotyping':  return _renderSerotyping(parsed);
       default:
         if (!rawText) return '';
         return _detailCard(`<pre class="whitespace-pre-wrap break-all font-mono text-slate-400
@@ -1530,6 +1534,41 @@ function _renderBandage(d) {
          class="w-full rounded-lg max-h-48 object-contain bg-white border border-slate-100"
          loading="lazy"
          onerror="this.style.display='none'">
+  `);
+}
+
+function _renderCoverage(d) {
+  if (!d) return '';
+  if (d.error) return _detailCard(`<span class="text-red-400 text-xs">${d.error}</span>`);
+  const depth = d.mean_depth ?? '—';
+  const bread = d.breadth_1x_pct ?? '—';
+  const depthNum = parseFloat(depth);
+  const breadNum = parseFloat(bread);
+  const depthColor = depthNum >= 20 ? 'text-emerald-600' : (depthNum >= 10 ? 'text-amber-500' : 'text-red-500');
+  const breadColor = breadNum >= 90 ? 'text-emerald-600' : (breadNum >= 70 ? 'text-amber-500' : 'text-red-500');
+  return _detailCard(`
+    <div class="flex gap-4 flex-wrap">
+      <div><div class="text-xs text-slate-400 uppercase tracking-wide">Mean Depth</div>
+           <div class="text-lg font-bold ${depthColor}">${isNaN(depthNum)?depth:depthNum.toFixed(1)+'x'}</div></div>
+      <div><div class="text-xs text-slate-400 uppercase tracking-wide">Breadth ≥1x</div>
+           <div class="text-lg font-bold ${breadColor}">${isNaN(breadNum)?bread:breadNum.toFixed(1)+'%'}</div></div>
+    </div>
+  `);
+}
+
+function _renderSerotyping(d) {
+  if (!d) return '';
+  if (d.skipped) return _detailCard(`<span class="text-slate-400 text-xs">${d.reason||'Not applicable for this species.'}</span>`);
+  if (d.error)   return _detailCard(`<span class="text-red-400 text-xs">${d.error}</span>`);
+  const tool     = d.tool || '';
+  const serotype = d.serotype || d.serovar || d.st || '—';
+  const species  = d.detected_species || '';
+  return _detailCard(`
+    <div class="flex flex-wrap gap-2 items-center">
+      ${_pill(tool, 'bg-indigo-100 text-indigo-700')}
+      ${_pill(serotype, 'bg-emerald-100 text-emerald-700')}
+      ${species ? `<span class="text-xs text-slate-400 italic">${species}</span>` : ''}
+    </div>
   `);
 }
 

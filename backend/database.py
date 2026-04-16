@@ -156,6 +156,26 @@ def get_overflow_jobs(keep: int = 10) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def cancel_stale_jobs() -> int:
+    """
+    Called once at server startup.  Any job still in an in-progress state
+    (queued / running / ai_pending) was interrupted by a crash or restart and
+    will never complete.  Mark them cancelled so they don't block new uploads.
+    Returns the number of rows updated.
+    """
+    with get_conn() as conn:
+        cur = conn.execute(
+            """UPDATE jobs
+               SET status = 'cancelled',
+                   error  = 'Server restarted while job was in progress.'
+               WHERE status IN ('queued', 'running', 'ai_pending')"""
+        )
+        n = cur.rowcount
+    if n:
+        logger.warning("Cancelled %d stale job(s) left over from previous run.", n)
+    return n
+
+
 def mark_files_deleted(job_id: str) -> None:
     """Marks a job's working files as deleted (report is kept)."""
     with get_conn() as conn:
@@ -198,7 +218,7 @@ def count_active_jobs_for_ip(ip_hash: str) -> int:
     with get_conn() as conn:
         row = conn.execute(
             """SELECT COUNT(*) as n FROM jobs
-               WHERE ip_hash = ? AND status NOT IN ('completed','failed','deleted')""",
+               WHERE ip_hash = ? AND status NOT IN ('completed','failed','deleted','cancelled')""",
             (ip_hash,)
         ).fetchone()
     return row["n"] if row else 0
