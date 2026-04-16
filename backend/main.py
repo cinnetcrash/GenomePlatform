@@ -30,6 +30,7 @@ from config import (
     RATE_LIMIT, RESULTS_DIR, UPLOAD_DIR,
 )
 from pipeline import run_pipeline, get_cancel_event, PipelineCancelledError
+from comparison_pipeline import run_comparison
 from report_generator import generate_html_report, save_report
 from security import (
     compute_md5, generate_job_id, job_upload_dir,
@@ -546,3 +547,75 @@ async def system_check():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ─── Multi-sample comparison ───────────────────────────────────────────────────
+
+@app.post("/compare")
+@limiter.limit("10/minute")
+async def start_comparison(request: Request):
+    """
+    Accepts a JSON body: {"job_ids": ["id1", "id2", ...]}
+    Validates all jobs, then launches the comparison in a background thread.
+    """
+    body = await request.json()
+    job_ids = body.get("job_ids", [])
+
+    if not isinstance(job_ids, list) or len(job_ids) < 2:
+        raise HTTPException(status_code=400, detail="Provide at least 2 job IDs.")
+    if len(job_ids) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 samples per comparison.")
+
+    # Validate all jobs exist and are completed
+    valid_ids = []
+    for jid in job_ids:
+        job = db.get_job(jid)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {jid} not found.")
+        if job["status"] != "completed":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {jid} is not completed (status: {job['status']})."
+            )
+        valid_ids.append(jid)
+
+    ip_hash = _ip_hash(request)
+    comp_id = generate_job_id()
+    db.create_comparison(comp_id, valid_ids, ip_hash)
+
+    def _bg():
+        run_comparison(comp_id, valid_ids)
+
+    threading.Thread(target=_bg, daemon=True).start()
+    logger.info("Comparison %s started for %d jobs", comp_id, len(valid_ids))
+    return {"comparison_id": comp_id}
+
+
+@app.get("/compare/{comp_id}/status")
+async def comparison_status(comp_id: str):
+    """Poll comparison status."""
+    comp = db.get_comparison(comp_id)
+    if not comp:
+        raise HTTPException(status_code=404, detail="Comparison not found.")
+    return {
+        "comparison_id": comp_id,
+        "status":        comp["status"],
+        "error":         comp.get("error"),
+        "has_report":    bool(comp.get("report_path") and
+                              Path(comp["report_path"]).exists()),
+    }
+
+
+@app.get("/compare/{comp_id}/report", response_class=HTMLResponse)
+async def comparison_report(comp_id: str):
+    """View the comparison HTML report."""
+    comp = db.get_comparison(comp_id)
+    if not comp:
+        raise HTTPException(status_code=404, detail="Comparison not found.")
+    if comp["status"] != "completed":
+        raise HTTPException(status_code=400,
+                            detail=f"Comparison not ready (status: {comp['status']}).")
+    rp = Path(comp["report_path"])
+    if not rp.exists():
+        raise HTTPException(status_code=404, detail="Report file not found.")
+    return HTMLResponse(content=rp.read_text(encoding="utf-8"))

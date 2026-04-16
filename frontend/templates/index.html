@@ -118,6 +118,26 @@
           <p>Loading history…</p>
         </div>
       </div>
+      <!-- Compare bar — appears when ≥2 samples selected -->
+      <div id="compare-bar"
+           class="hidden px-6 py-3 border-t border-indigo-100 bg-indigo-50
+                  flex items-center justify-between gap-4 flex-shrink-0 rounded-b-2xl">
+        <span class="text-sm text-indigo-700 font-medium">
+          <span id="compare-count">0</span> samples selected for comparison
+        </span>
+        <div class="flex gap-2">
+          <button onclick="_selectedForCompare.clear();_updateCompareBar();renderHistory(window._lastHistoryData||[])"
+                  class="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-800
+                         bg-white border border-slate-200 rounded-lg transition-colors">
+            Clear
+          </button>
+          <button id="compare-btn" onclick="startComparison()"
+                  class="px-4 py-1.5 text-xs font-semibold text-white bg-indigo-600
+                         hover:bg-indigo-700 rounded-lg transition-colors">
+            🔬 Compare Selected
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1153,7 +1173,8 @@ async function openHistory() {
   try {
     const res = await fetch('/history');
     const data = await res.json();
-    renderHistory(data.analyses || []);
+    window._lastHistoryData = data.analyses || [];
+    renderHistory(window._lastHistoryData);
   } catch(e) {
     document.getElementById('history-body').innerHTML =
       `<p class="text-red-500 p-4">Failed to load history: ${e.message}</p>`;
@@ -1164,8 +1185,92 @@ function closeHistory() {
   document.getElementById('history-modal').classList.add('hidden');
 }
 
+// Tracks which job IDs are selected for comparison
+const _selectedForCompare = new Set();
+
+function _updateCompareBar() {
+  const bar = document.getElementById('compare-bar');
+  const cnt = document.getElementById('compare-count');
+  const n   = _selectedForCompare.size;
+  if (n >= 2) {
+    bar.classList.remove('hidden');
+    cnt.textContent = n;
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+async function startComparison() {
+  const ids = [..._selectedForCompare];
+  if (ids.length < 2) return;
+  const btn = document.getElementById('compare-btn');
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  try {
+    const res  = await fetch('/compare', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({job_ids: ids}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed');
+    const compId = data.comparison_id;
+    // Show progress in history body
+    document.getElementById('history-body').innerHTML = `
+      <div class="text-center py-12 text-slate-500" id="cmp-progress-${compId}">
+        <div class="text-4xl mb-3 animate-spin">⚙️</div>
+        <p class="font-semibold">Comparison running…</p>
+        <p class="text-sm mt-1 text-slate-400">This may take a minute.</p>
+      </div>`;
+    document.getElementById('compare-bar').classList.add('hidden');
+    _selectedForCompare.clear();
+    _pollComparison(compId);
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '🔬 Compare Selected';
+    alert('Comparison failed: ' + e.message);
+  }
+}
+
+async function _pollComparison(compId) {
+  while (true) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const res  = await fetch(`/compare/${compId}/status`);
+      const data = await res.json();
+      if (data.status === 'completed' && data.has_report) {
+        document.getElementById('history-body').innerHTML = `
+          <div class="text-center py-10">
+            <div class="text-4xl mb-3">✅</div>
+            <p class="font-semibold text-emerald-700">Comparison complete!</p>
+            <a href="/compare/${compId}/report" target="_blank"
+               class="inline-block mt-4 px-5 py-2 bg-indigo-600 hover:bg-indigo-700
+                      text-white rounded-lg font-semibold text-sm transition-colors">
+              Open Comparison Report
+            </a>
+          </div>`;
+        return;
+      }
+      if (data.status === 'failed') {
+        document.getElementById('history-body').innerHTML = `
+          <div class="text-center py-10 text-red-500">
+            <div class="text-3xl mb-2">✗</div>
+            <p>Comparison failed: ${data.error || 'Unknown error'}</p>
+            <button onclick="openHistory()" class="mt-4 text-sm text-indigo-600 hover:underline">
+              Back to history
+            </button>
+          </div>`;
+        return;
+      }
+    } catch(e) { /* network hiccup — keep polling */ }
+  }
+}
+
 function renderHistory(analyses) {
   const body = document.getElementById('history-body');
+  _selectedForCompare.clear();
+  _updateCompareBar();
+
   if (!analyses.length) {
     body.innerHTML = `<div class="text-center py-12 text-slate-400">
       <div class="text-4xl mb-3">🔬</div>
@@ -1174,6 +1279,8 @@ function renderHistory(analyses) {
     </div>`;
     return;
   }
+
+  const completedCount = analyses.filter(a => a.status === 'completed').length;
 
   const statusStyle = {
     completed: ['bg-emerald-100 text-emerald-700', '✓ Completed'],
@@ -1199,6 +1306,12 @@ function renderHistory(analyses) {
       ? `<span class="px-1.5 py-0.5 rounded text-xs font-mono bg-slate-100 text-slate-600">${a.read_type}</span>`
       : '—';
 
+    // Checkbox — only for completed jobs
+    const checkbox = a.status === 'completed'
+      ? `<input type="checkbox" class="w-4 h-4 rounded accent-indigo-600 cursor-pointer"
+           onchange="toggleCompare('${a.job_id}', this.checked)">`
+      : `<div class="w-4 h-4"></div>`;
+
     let actions = '';
     if (a.has_report) {
       actions = `
@@ -1217,7 +1330,8 @@ function renderHistory(analyses) {
     }
 
     return `
-      <tr class="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+      <tr class="border-b border-slate-100 hover:bg-slate-50 transition-colors" id="hist-row-${a.job_id}">
+        <td class="py-3 px-3">${checkbox}</td>
         <td class="py-3 px-4">
           <div class="font-medium text-slate-800 text-sm truncate max-w-[200px]" title="${a.filename}">${a.filename}</div>
           <div class="text-xs text-slate-400 font-mono mt-0.5">${a.job_id.slice(0,8)}…</div>
@@ -1235,10 +1349,16 @@ function renderHistory(analyses) {
       </tr>`;
   }).join('');
 
+  const hint = completedCount >= 2
+    ? `<p class="text-xs text-slate-400 mt-2">Tip: select 2 or more completed analyses to compare them.</p>`
+    : '';
+
   body.innerHTML = `
-    <table class="w-full text-sm">
+    ${hint}
+    <table class="w-full text-sm mt-2">
       <thead>
         <tr class="border-b-2 border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
+          <th class="py-2 px-3 w-8"></th>
           <th class="py-2 px-4 text-left">Sample</th>
           <th class="py-2 px-4 text-left">Type</th>
           <th class="py-2 px-4 text-left">Status</th>
@@ -1249,6 +1369,12 @@ function renderHistory(analyses) {
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
+}
+
+function toggleCompare(jobId, checked) {
+  if (checked) _selectedForCompare.add(jobId);
+  else         _selectedForCompare.delete(jobId);
+  _updateCompareBar();
 }
 
 // ─── Stage Detail Renderers ───────────────────────────────────────────────

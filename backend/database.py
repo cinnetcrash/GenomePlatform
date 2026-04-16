@@ -36,8 +36,19 @@ def init_db() -> None:
                 files_deleted INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS comparisons (
+                id          TEXT PRIMARY KEY,
+                job_ids     TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'queued',
+                created_at  TEXT NOT NULL,
+                ip_hash     TEXT NOT NULL,
+                report_path TEXT,
+                error       TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_expires ON jobs(expires_at);
             CREATE INDEX IF NOT EXISTS idx_ip      ON jobs(ip_hash);
+            CREATE INDEX IF NOT EXISTS idx_cmp_ip  ON comparisons(ip_hash);
         """)
         # Migrate existing databases — safe no-op if column already present
         try:
@@ -152,6 +163,46 @@ def get_overflow_jobs(keep: int = 10) -> list[dict]:
                ORDER BY created_at DESC
                LIMIT -1 OFFSET ?""",
             (keep,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ─── Comparison helpers ───────────────────────────────────────────────────────
+
+def create_comparison(comp_id: str, job_ids: list[str], ip_hash: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO comparisons (id, job_ids, status, created_at, ip_hash)
+               VALUES (?, ?, 'queued', ?, ?)""",
+            (comp_id, json.dumps(job_ids), now, ip_hash)
+        )
+
+
+def update_comparison(comp_id: str, status: str,
+                      error: str = None, report_path: str = None) -> None:
+    fields, vals = ["status = ?"], [status]
+    if error        is not None: fields.append("error = ?");       vals.append(error)
+    if report_path  is not None: fields.append("report_path = ?"); vals.append(report_path)
+    vals.append(comp_id)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE comparisons SET {', '.join(fields)} WHERE id = ?", vals)
+
+
+def get_comparison(comp_id: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM comparisons WHERE id = ?", (comp_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_recent_comparisons(ip_hash: str, limit: int = 10) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM comparisons WHERE ip_hash = ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (ip_hash, limit)
         ).fetchall()
     return [dict(r) for r in rows]
 
