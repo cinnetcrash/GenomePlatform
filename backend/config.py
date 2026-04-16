@@ -88,6 +88,11 @@ CHECKV_DB  = Path(os.getenv("CHECKV_DB",
 VIRAL_DOMINANT_THRESHOLD = 50.0   # % viral reads → skip bacterial steps
 HUMAN_DOMINANT_THRESHOLD = 40.0   # % human reads → warn + skip bacterial steps
 
+# Host depletion (read-level filtering using Kraken2 output)
+HOST_TAXIDS              = {9606}   # NCBI taxids to remove (9606 = Homo sapiens)
+HOST_DEPLETION_THRESHOLD = 1.0     # % host reads that triggers the depletion step
+HOST_DEPLETION_MIN_READS = 10_000  # reads needed after depletion to continue bacterial analysis
+
 # === Kraken2 ===
 KRAKEN2_DEFAULT_DB = Path(os.getenv(
     "KRAKEN2_DEFAULT_DB",

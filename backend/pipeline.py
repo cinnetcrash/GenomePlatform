@@ -19,6 +19,7 @@ from config import (
     ASSEMBLY_QC, ASSEMBLY_THREADS, AUTOCYCLER_BIN, BANDAGE_BIN,
     CHECKM2_DB, CHECKV_DB, CONDA_BASE,
     FLYE_ASM_COVERAGE, HUMAN_DOMINANT_THRESHOLD,
+    HOST_TAXIDS, HOST_DEPLETION_THRESHOLD, HOST_DEPLETION_MIN_READS,
     MAX_THREADS, RESULTS_DIR, SCRIPTS_DIR,
     SHOVILL_ASSEMBLER, VIRAL_DOMINANT_THRESHOLD,
 )
@@ -376,6 +377,131 @@ def stage_kraken2(job_id: str, fastq: Path, out_dir: Path,
                 job_id, result["classified_percent"],
                 result["top_taxa"][0]["name"] if result["top_taxa"] else "—")
     return result
+
+
+# ─── Host Depletion ───────────────────────────────────────────────────────────
+
+def _normalize_rid(raw: str) -> str:
+    """Strip /1 /2 pair suffixes and any trailing description from a read ID."""
+    rid = raw.split()[0]
+    if rid.endswith("/1") or rid.endswith("/2"):
+        rid = rid[:-2]
+    return rid
+
+
+def _filter_fastq(in_path: Path, out_path: Path, exclude_ids: set) -> int:
+    """
+    Writes a gzipped FASTQ excluding reads whose ID is in exclude_ids.
+    Returns the number of reads kept.
+    """
+    import gzip as _gz
+    open_in = _gz.open if str(in_path).endswith(".gz") else open
+    kept = 0
+    with open_in(in_path, "rt", errors="ignore") as fin, \
+         _gz.open(out_path, "wt") as fout:
+        while True:
+            header = fin.readline()
+            if not header:
+                break
+            seq  = fin.readline()
+            plus = fin.readline()
+            qual = fin.readline()
+            if not qual:
+                break
+            if _normalize_rid(header[1:]) not in exclude_ids:
+                fout.write(header + seq + plus + qual)
+                kept += 1
+    return kept
+
+
+def stage_host_depletion(job_id: str, fastq_r1: Path, out_dir: Path,
+                          fastq_r2: Path | None = None,
+                          host_taxids: set | None = None,
+                          ) -> tuple[Path, Path | None, dict]:
+    """
+    Removes host reads identified by Kraken2 from the FASTQ file(s).
+    Parses kraken2/output.txt (per-read taxid assignments) to build an
+    exclusion set, then streams through the FASTQ writing only non-host reads.
+
+    Returns (depleted_r1, depleted_r2_or_None, metrics_dict).
+    If no host reads are found, returns the original paths unchanged.
+    """
+    if host_taxids is None:
+        host_taxids = HOST_TAXIDS
+
+    db.update_stage(job_id, "host_depletion", "running",
+                    "Scanning Kraken2 classifications for host reads…")
+
+    dep_dir   = out_dir / "host_depletion"
+    dep_dir.mkdir(exist_ok=True)
+    k2_output = out_dir / "kraken2" / "output.txt"
+
+    # ── Parse Kraken2 per-read output ────────────────────────────────────────
+    host_ids: set[str] = set()
+    total_reads = 0
+
+    if not k2_output.exists():
+        msg = "Kraken2 output.txt not found — host depletion skipped."
+        logger.warning("[%s] %s", job_id, msg)
+        db.update_stage(job_id, "host_depletion", "skipped", msg)
+        return fastq_r1, fastq_r2, {"depleted": False, "reason": msg}
+
+    for line in k2_output.read_text(errors="ignore").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        total_reads += 1
+        try:
+            taxid = int(parts[2])
+        except ValueError:
+            continue
+        if taxid in host_taxids:
+            host_ids.add(_normalize_rid(parts[1]))
+
+    host_count = len(host_ids)
+    host_pct   = round(host_count / total_reads * 100, 2) if total_reads else 0.0
+
+    if host_count == 0:
+        result = {
+            "depleted": False, "total_reads": total_reads,
+            "host_reads_removed": 0, "host_percent": 0.0,
+            "reads_after": total_reads,
+        }
+        db.update_stage(job_id, "host_depletion", "done", json.dumps(result))
+        logger.info("[%s] Host depletion: 0 host reads found.", job_id)
+        return fastq_r1, fastq_r2, result
+
+    logger.info("[%s] Host depletion: removing %d reads (%.1f%%) out of %d",
+                job_id, host_count, host_pct, total_reads)
+
+    db.update_stage(job_id, "host_depletion", "running",
+                    f"Filtering {host_count:,} host reads from FASTQ…")
+
+    # ── Filter FASTQ files ───────────────────────────────────────────────────
+    dep_r1  = dep_dir / "depleted_R1.fastq.gz"
+    kept_r1 = _filter_fastq(fastq_r1, dep_r1, host_ids)
+
+    dep_r2: Path | None = None
+    if fastq_r2:
+        dep_r2  = dep_dir / "depleted_R2.fastq.gz"
+        _filter_fastq(fastq_r2, dep_r2, host_ids)
+
+    reads_after     = kept_r1
+    reads_after_pct = round(reads_after / total_reads * 100, 1) if total_reads else 0.0
+
+    result = {
+        "depleted":            True,
+        "total_reads":         total_reads,
+        "host_reads_removed":  host_count,
+        "host_percent":        host_pct,
+        "reads_after":         reads_after,
+        "reads_after_percent": reads_after_pct,
+        "host_taxids":         sorted(host_taxids),
+    }
+    db.update_stage(job_id, "host_depletion", "done", json.dumps(result))
+    logger.info("[%s] Host depletion done: %d reads kept (%.1f%%)",
+                job_id, reads_after, reads_after_pct)
+    return dep_r1, dep_r2, result
 
 
 # ─── Assembly (Illumina + MinION / Autocycler) ────────────────────────────────
@@ -1217,6 +1343,29 @@ def run_pipeline(job_id: str, fastq_path: Path,
             job_id, fastq_path, out_dir, read_type, fastq_r2=fastq_r2
         )
         logger.info("[%s] QC done.", job_id)
+
+        # ── 3b. Host depletion ────────────────────────────────────────────
+        human_pct = gctx.get("human_pct", 0.0)
+        if results.get("kraken2") and human_pct >= HOST_DEPLETION_THRESHOLD:
+            filtered_r1, filtered_r2, depl = stage_host_depletion(
+                job_id, filtered_r1, out_dir, fastq_r2=filtered_r2,
+            )
+            results["host_depletion"] = depl
+            # If enough reads remain after depletion, re-enable bacterial analysis
+            if depl.get("depleted") and depl.get("reads_after", 0) >= HOST_DEPLETION_MIN_READS:
+                gctx["skip_bacterial"] = False
+                gctx["context"]        = "bacterial"
+                gctx["reason"] = (
+                    f"{depl['host_reads_removed']:,} host reads removed "
+                    f"({depl['host_percent']}% Homo sapiens). "
+                    f"{depl['reads_after']:,} reads remain — continuing bacterial analysis."
+                )
+                logger.info("[%s] Post-depletion: bacterial analysis re-enabled.", job_id)
+        else:
+            db.update_stage(job_id, "host_depletion", "skipped",
+                            f"No significant host contamination detected "
+                            f"({human_pct:.1f}% < {HOST_DEPLETION_THRESHOLD}% threshold).")
+            results["host_depletion"] = {"depleted": False, "host_percent": human_pct}
 
         # ── 4. Assembly ───────────────────────────────────────────────────
         fasta, asm_qc = stage_assembly(

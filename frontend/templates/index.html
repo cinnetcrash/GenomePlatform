@@ -1188,8 +1188,9 @@ function _fmtNum(n) {
 function renderStageDetail(key, parsed, rawText) {
   try {
     switch(key) {
-      case 'kraken2':  return _renderKraken2(parsed);
-      case 'qc':       return _renderQc(parsed);
+      case 'kraken2':        return _renderKraken2(parsed);
+      case 'host_depletion': return _renderHostDepletion(parsed);
+      case 'qc':             return _renderQc(parsed);
       case 'assembly': return _renderAssembly(parsed);
       case 'quast':    return _renderQuast(parsed);
       case 'checkm2':  return _renderCheckm2(parsed);
@@ -1205,6 +1206,45 @@ function renderStageDetail(key, parsed, rawText) {
                                         max-h-32 overflow-y-auto">${rawText.slice(0,400)}</pre>`);
     }
   } catch(e) { return ''; }
+}
+
+function _renderHostDepletion(d) {
+  if (!d) return '';
+  if (!d.depleted) {
+    const pct = d.host_percent ?? 0;
+    return _detailCard(`<span class="text-slate-400 text-xs">No host reads detected (${pct}% &lt; threshold).</span>`);
+  }
+  const total   = (d.total_reads   || 0).toLocaleString();
+  const removed = (d.host_reads_removed || 0).toLocaleString();
+  const after   = (d.reads_after   || 0).toLocaleString();
+  const hostPct = d.host_percent   ?? 0;
+  const afterPct = d.reads_after_percent ?? 0;
+  return _detailCard(`
+    <div class="flex flex-col gap-1.5 text-xs">
+      <div class="flex items-center gap-2">
+        <div class="w-20 text-slate-500 shrink-0">Before</div>
+        <div class="flex-1 bg-slate-200 rounded-full h-2.5 overflow-hidden">
+          <div class="bg-slate-400 h-full rounded-full" style="width:100%"></div>
+        </div>
+        <div class="w-24 text-right font-mono text-slate-500">${total} reads</div>
+      </div>
+      <div class="flex items-center gap-2">
+        <div class="w-20 text-slate-500 shrink-0">After</div>
+        <div class="flex-1 bg-slate-200 rounded-full h-2.5 overflow-hidden">
+          <div class="bg-emerald-500 h-full rounded-full" style="width:${afterPct}%"></div>
+        </div>
+        <div class="w-24 text-right font-mono text-emerald-700">${after} reads</div>
+      </div>
+      <div class="mt-1 flex gap-1.5 flex-wrap">
+        <span class="bg-red-50 text-red-700 border border-red-200 rounded-full px-2 py-0.5 font-semibold">
+          −${removed} host (${hostPct}%)
+        </span>
+        <span class="bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5 font-semibold">
+          ✓ ${afterPct}% kept
+        </span>
+      </div>
+    </div>
+  `);
 }
 
 function _renderKraken2(d) {

@@ -60,6 +60,72 @@ def _kraken2_section(k2: dict) -> str:
     return summary + "\n".join(bars)
 
 
+def _host_depletion_section(depl: dict) -> str:
+    """Renders host depletion metrics — shown only when host reads were detected."""
+    if not depl or not depl.get("depleted"):
+        return ""
+
+    total   = depl.get("total_reads", 0)
+    removed = depl.get("host_reads_removed", 0)
+    host_pct = depl.get("host_percent", 0.0)
+    after   = depl.get("reads_after", 0)
+    after_pct = depl.get("reads_after_percent", 0.0)
+
+    def _fmt(n):
+        try:
+            return f"{int(n):,}"
+        except (ValueError, TypeError):
+            return str(n)
+
+    # Colour the host bar red, the remaining bar green
+    return f"""
+    <div class="section">
+      <div class="section-title">&#x1F9F9; Host Read Depletion</div>
+      <div class="section-body">
+        <p style="margin-bottom:1.2rem;font-size:.9rem;color:#374151">
+          <strong>{host_pct}%</strong> of reads were classified as
+          <em>Homo sapiens</em> (taxid&nbsp;9606) by Kraken2 and removed before assembly.
+        </p>
+
+        <!-- Before -->
+        <div style="margin-bottom:.8rem">
+          <div style="display:flex;justify-content:space-between;font-size:.8rem;
+                      color:#64748b;margin-bottom:.25rem">
+            <span>Before depletion</span>
+            <span><strong>{_fmt(total)}</strong> reads · 100%</span>
+          </div>
+          <div style="background:#e2e8f0;border-radius:9999px;height:14px;overflow:hidden">
+            <div style="width:100%;background:#94a3b8;height:100%;border-radius:9999px"></div>
+          </div>
+        </div>
+
+        <!-- After -->
+        <div style="margin-bottom:1.2rem">
+          <div style="display:flex;justify-content:space-between;font-size:.8rem;
+                      color:#64748b;margin-bottom:.25rem">
+            <span>After depletion</span>
+            <span><strong>{_fmt(after)}</strong> reads · {after_pct}%</span>
+          </div>
+          <div style="background:#e2e8f0;border-radius:9999px;height:14px;overflow:hidden">
+            <div style="width:{after_pct}%;background:#22c55e;height:100%;border-radius:9999px"></div>
+          </div>
+        </div>
+
+        <!-- Summary chips -->
+        <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+          <span style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;
+                       border-radius:9999px;padding:.25rem .85rem;font-size:.8rem;font-weight:600">
+            &#x2796; {_fmt(removed)} host reads removed ({host_pct}%)
+          </span>
+          <span style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;
+                       border-radius:9999px;padding:.25rem .85rem;font-size:.8rem;font-weight:600">
+            &#x2714; {_fmt(after)} reads used for assembly ({after_pct}%)
+          </span>
+        </div>
+      </div>
+    </div>"""
+
+
 def _assembly_qc_section(qc_checks: list[dict]) -> str:
     """Renders assembly QC pass/warn/fail indicators."""
     if not qc_checks:
@@ -380,6 +446,7 @@ def generate_html_report(job_id: str,
     checkm2     = pipeline_results.get("checkm2") or {}
     kraken2     = pipeline_results.get("kraken2") or {}
     gctx        = pipeline_results.get("genomic_context") or {}
+    host_depl   = pipeline_results.get("host_depletion") or {}
 
     risk        = ai_results.get("risk_level", "UNKNOWN").upper()
     risk_color, risk_bg = RISK_COLORS.get(risk, RISK_COLORS["UNKNOWN"])
@@ -494,6 +561,9 @@ def generate_html_report(job_id: str,
       {_kraken2_section(kraken2)}
     </div>
   </div>
+
+  <!-- Host Depletion (only rendered when host reads were removed) -->
+  {_host_depletion_section(host_depl)}
 
   <!-- QC -->
   <div class="section">
