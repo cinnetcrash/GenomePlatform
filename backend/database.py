@@ -171,6 +171,28 @@ def mark_deleted(job_id: str) -> None:
         )
 
 
+def cancel_job(job_id: str) -> bool:
+    """
+    Marks a job as cancelled.  Returns True if the job was active, False otherwise.
+    """
+    with get_conn() as conn:
+        cur = conn.execute(
+            """UPDATE jobs SET status = 'cancelled', error = 'Cancelled by user.'
+               WHERE id = ? AND status IN ('queued', 'running', 'ai_pending')""",
+            (job_id,)
+        )
+        return cur.rowcount > 0
+
+
+def get_job_status(job_id: str) -> str | None:
+    """Lightweight single-field fetch — avoids loading stages JSON for cancel checks."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    return row["status"] if row else None
+
+
 def count_active_jobs_for_ip(ip_hash: str) -> int:
     """Returns the number of active jobs for a given IP hash."""
     with get_conn() as conn:

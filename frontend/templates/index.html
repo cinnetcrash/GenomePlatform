@@ -52,7 +52,8 @@
   <header class="bg-gradient-to-r from-indigo-700 to-violet-700 text-white py-6 px-8 shadow-lg">
     <div class="max-w-5xl mx-auto flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-bold tracking-tight">🧬 LycianWay</h1>
+        <h1 class="text-2xl font-bold tracking-tight cursor-pointer hover:opacity-80 transition-opacity"
+            onclick="scrollToUpload()" title="Go to upload">🧬 LycianWay</h1>
         <p class="text-indigo-200 text-sm mt-1">
           Automated genomic analysis · AI clinical interpretation
         </p>
@@ -117,6 +118,15 @@
           <p>Loading history…</p>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Active jobs nav bar — shown only when analyses are running -->
+  <div id="active-jobs-bar"
+       class="hidden bg-indigo-900/80 border-b border-indigo-700 px-8 py-2 sticky top-0 z-40 backdrop-blur">
+    <div class="max-w-5xl mx-auto flex items-center gap-3 flex-wrap">
+      <span class="text-indigo-400 text-xs font-semibold uppercase tracking-wider shrink-0">Running:</span>
+      <div id="active-jobs-chips" class="flex items-center gap-2 flex-wrap"></div>
     </div>
   </div>
 
@@ -526,9 +536,10 @@ function clearQueue() {
 }
 
 const STAGE_LABELS = {
-  detect:     "📡 Read Type Detection",
-  kraken2:    "🦠 Taxonomic Classification (Kraken2)",
-  qc:         "📊 Quality Control (QC)",
+  detect:         "📡 Read Type Detection",
+  kraken2:        "🦠 Taxonomic Classification (Kraken2)",
+  host_depletion: "🧹 Host Read Depletion",
+  qc:             "📊 Quality Control (QC)",
   assembly:   "🔧 Genome Assembly",
   bandage:    "🗺 Assembly Graph (Bandage)",
   quast:      "📐 Assembly QC (QUAST)",
@@ -719,7 +730,14 @@ function spawnJobCard(jobId, sampleName, isPE, errorMsg) {
         </p>
         <p class="text-xs text-slate-400 mt-0.5">Job: <code class="bg-slate-100 px-1 rounded">${jobId}</code></p>
       </div>
-      <span id="status-${jobId}" class="px-3 py-1 rounded-full text-sm font-semibold bg-amber-100 text-amber-700">Running</span>
+      <div class="flex items-center gap-2">
+        <span id="status-${jobId}" class="px-3 py-1 rounded-full text-sm font-semibold bg-amber-100 text-amber-700">Running</span>
+        <button id="cancel-btn-${jobId}" onclick="cancelJob('${jobId}', this)"
+                class="px-3 py-1 rounded-full text-sm font-semibold bg-red-50 text-red-600
+                       border border-red-200 hover:bg-red-100 transition-colors">
+          ✕ Cancel
+        </button>
+      </div>
     </div>
     <div class="px-8 py-5">
       <div id="stages-${jobId}" class="space-y-1 mb-4"></div>
@@ -753,31 +771,43 @@ async function pollJob(jobId, t0, timer) {
     renderJobStages(jobId, data.stages || {}, t0);
     const statusEl = document.getElementById(`status-${jobId}`);
     const map = {
-      queued:['Queued','bg-slate-100 text-slate-600'],
-      running:['Running','bg-amber-100 text-amber-700'],
-      ai_pending:['AI Analysis','bg-violet-100 text-violet-700'],
-      completed:['Completed','bg-emerald-100 text-emerald-700'],
-      failed:['Failed','bg-red-100 text-red-700'],
+      queued:     ['Queued',      'bg-slate-100 text-slate-600'],
+      running:    ['Running',     'bg-amber-100 text-amber-700'],
+      ai_pending: ['AI Analysis', 'bg-violet-100 text-violet-700'],
+      completed:  ['Completed',   'bg-emerald-100 text-emerald-700'],
+      failed:     ['Failed',      'bg-red-100 text-red-700'],
+      cancelled:  ['Cancelled',   'bg-slate-200 text-slate-500'],
     };
     const [label,cls] = map[data.status]||['Unknown','bg-slate-100 text-slate-600'];
     if (statusEl) { statusEl.textContent=label; statusEl.className=`px-3 py-1 rounded-full text-sm font-semibold ${cls}`; }
-    if (data.status === 'completed') {
+
+    // Update active-jobs nav
+    if (activeJobs[jobId]) activeJobs[jobId].status = data.status;
+    updateActiveJobsNav();
+
+    const terminal = ['completed','failed','cancelled'];
+    if (terminal.includes(data.status)) {
       clearInterval(timer);
-      const btns = document.getElementById(`result-btns-${jobId}`);
-      if (btns) btns.classList.remove('hidden');
-    } else if (data.status === 'failed') {
-      clearInterval(timer);
-      const etaEl = document.getElementById(`eta-${jobId}`);
-      if (etaEl) etaEl.textContent = `Error: ${data.error || 'Unknown error'}`;
-      // If a partial report was generated, show report buttons anyway
-      if (data.has_report) {
+      // Hide cancel button on terminal states
+      document.getElementById(`cancel-btn-${jobId}`)?.remove();
+
+      if (data.status === 'completed') {
         const btns = document.getElementById(`result-btns-${jobId}`);
-        if (btns) {
-          btns.classList.remove('hidden');
-          // Add a warning label to the view-report button
-          const viewBtn = btns.querySelector('a[href*="/view/"]');
-          if (viewBtn) viewBtn.textContent = '⚠️ View Partial Report';
+        if (btns) btns.classList.remove('hidden');
+      } else if (data.status === 'failed') {
+        const etaEl = document.getElementById(`eta-${jobId}`);
+        if (etaEl) etaEl.textContent = `Error: ${data.error || 'Unknown error'}`;
+        if (data.has_report) {
+          const btns = document.getElementById(`result-btns-${jobId}`);
+          if (btns) {
+            btns.classList.remove('hidden');
+            const viewBtn = btns.querySelector('a[href*="/view/"]');
+            if (viewBtn) viewBtn.textContent = '⚠️ View Partial Report';
+          }
         }
+      } else if (data.status === 'cancelled') {
+        const etaEl = document.getElementById(`eta-${jobId}`);
+        if (etaEl) etaEl.textContent = 'Analysis cancelled.';
       }
     }
   } catch(e) {}
@@ -1037,6 +1067,80 @@ function showError(msg) {
 }
 function resetAll() { location.reload(); }
 
+// ─── Navigation helpers ───────────────────────────────────────────────────
+function scrollToUpload() {
+  const el = document.getElementById('upload-card');
+  if (el) { el.classList.remove('hidden'); el.scrollIntoView({behavior:'smooth',block:'start'}); }
+  else window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function scrollToJob(jobId) {
+  const el = document.getElementById(`job-${jobId}`);
+  if (el) el.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function updateActiveJobsNav() {
+  const bar   = document.getElementById('active-jobs-bar');
+  const chips = document.getElementById('active-jobs-chips');
+  if (!bar || !chips) return;
+
+  const active = Object.entries(activeJobs).filter(([, info]) =>
+    ['running','queued','ai_pending','cancelling'].includes(info.status || 'running')
+  );
+
+  if (!active.length) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+
+  chips.innerHTML = active.map(([jid, info]) => {
+    const isCancelling = info.status === 'cancelling';
+    return `
+      <button onclick="scrollToJob('${jid}')"
+              class="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold
+                     transition-all ${isCancelling
+                       ? 'bg-slate-500/30 text-slate-300 border border-slate-500/40'
+                       : 'bg-white/15 hover:bg-white/25 text-white border border-white/20'}">
+        <span class="w-1.5 h-1.5 rounded-full ${isCancelling
+          ? 'bg-slate-400'
+          : 'bg-amber-400 animate-pulse'}"></span>
+        ${info.sampleName}
+        ${isCancelling ? '<span class="text-slate-400">· cancelling</span>' : ''}
+      </button>`;
+  }).join('');
+}
+
+// ─── Cancel ───────────────────────────────────────────────────────────────
+async function cancelJob(jobId, btn) {
+  // Inline confirm: swap button to [Confirm] [No]
+  const orig = btn.outerHTML;
+  btn.outerHTML = `
+    <span id="cancel-confirm-${jobId}" class="flex items-center gap-1">
+      <span class="text-xs text-slate-500 mr-1">Cancel?</span>
+      <button onclick="confirmCancel('${jobId}')"
+              class="px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500 text-white hover:bg-red-600">
+        Yes
+      </button>
+      <button onclick="dismissCancel('${jobId}', \`${orig.replace(/`/g,'\\`')}\`)"
+              class="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-200 text-slate-600 hover:bg-slate-300">
+        No
+      </button>
+    </span>`;
+}
+
+async function confirmCancel(jobId) {
+  const span = document.getElementById(`cancel-confirm-${jobId}`);
+  if (span) span.outerHTML = `<span class="px-3 py-1 rounded-full text-sm font-semibold bg-slate-100 text-slate-500">Cancelling…</span>`;
+  if (activeJobs[jobId]) activeJobs[jobId].status = 'cancelling';
+  updateActiveJobsNav();
+  try {
+    await fetch(`/cancel/${jobId}`, {method:'POST'});
+  } catch(e) {}
+}
+
+function dismissCancel(jobId, origHtml) {
+  const span = document.getElementById(`cancel-confirm-${jobId}`);
+  if (span) span.outerHTML = origHtml;
+}
+
 // ─── History ──────────────────────────────────────────────────────────────
 async function openHistory() {
   document.getElementById('history-modal').classList.remove('hidden');
@@ -1074,6 +1178,7 @@ function renderHistory(analyses) {
     failed:    ['bg-red-100 text-red-700',         '✗ Failed'],
     running:   ['bg-amber-100 text-amber-700',     '⟳ Running'],
     queued:    ['bg-slate-100 text-slate-600',     '· Queued'],
+    cancelled: ['bg-slate-200 text-slate-500',     '⊘ Cancelled'],
   };
 
   const rows = analyses.map(a => {

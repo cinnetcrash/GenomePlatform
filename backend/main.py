@@ -29,7 +29,7 @@ from config import (
     JOB_EXPIRY_HOURS, KRAKEN2_DEFAULT_DB, MAX_FILE_SIZE_MB,
     RATE_LIMIT, RESULTS_DIR, UPLOAD_DIR,
 )
-from pipeline import run_pipeline
+from pipeline import run_pipeline, get_cancel_event, PipelineCancelledError
 from report_generator import generate_html_report, save_report
 from security import (
     compute_md5, generate_job_id, job_upload_dir,
@@ -135,6 +135,13 @@ def _run_full_pipeline(job_id: str, fastq_path: Path,
                                         sample_type=sample_type)
         if pipeline_results.get("error"):
             job_error = pipeline_results["error"]
+        # If pipeline was cancelled, skip AI and report generation
+        if db.get_job_status(job_id) == "cancelled":
+            logger.info("[%s] Job cancelled — skipping AI and report.", job_id)
+            return
+    except PipelineCancelledError:
+        logger.info("[%s] Pipeline cancelled.", job_id)
+        return
     except Exception as exc:
         logger.error("[%s] Pipeline error: %s", job_id, exc, exc_info=True)
         job_error = str(exc)
@@ -365,6 +372,34 @@ async def job_status(request: Request, job_id: str):
     })
 
 
+@app.post("/cancel/{job_id}")
+async def cancel_job_endpoint(request: Request, job_id: str):
+    """Cancels a running analysis. Interrupts the active subprocess within ~5 s."""
+    import re
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise HTTPException(status_code=400, detail="Invalid job ID.")
+
+    job = db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if job["status"] not in ("running", "queued", "ai_pending"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is not active (status: {job['status']})."
+        )
+
+    # Signal the pipeline thread to stop (interrupts current subprocess within 5 s)
+    ev = get_cancel_event(job_id)
+    if ev:
+        ev.set()
+
+    # Mark DB immediately so UI sees "Cancelled" on next poll
+    db.cancel_job(job_id)
+    logger.info("[%s] Cancelled by user.", job_id)
+    return JSONResponse({"status": "cancelled", "job_id": job_id})
+
+
 def _get_report_path(job_id: str) -> Path:
     """Shared validation logic for report endpoints."""
     import re
@@ -373,7 +408,7 @@ def _get_report_path(job_id: str) -> Path:
     job = db.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
-    if job["status"] not in ("completed", "failed"):
+    if job["status"] not in ("completed", "failed", "cancelled"):
         raise HTTPException(
             status_code=202,
             detail=f"Analysis not yet complete (status: {job['status']})."

@@ -11,6 +11,8 @@ import logging
 import shutil
 import subprocess
 import sys
+import threading
+import time as _time
 from pathlib import Path
 from typing import Any
 
@@ -27,40 +29,78 @@ from security import safe_sample_name, sanitize_path
 
 logger = logging.getLogger("pipeline")
 
+# ─── Cancel Support ───────────────────────────────────────────────────────────
+
+_thread_local = threading.local()       # stores current job_id per thread
+_JOB_CANCEL: dict[str, threading.Event] = {}  # job_id → cancel event
+
+
+class PipelineCancelledError(Exception):
+    pass
+
+
+def register_cancel_event(job_id: str) -> threading.Event:
+    ev = threading.Event()
+    _JOB_CANCEL[job_id] = ev
+    return ev
+
+
+def get_cancel_event(job_id: str) -> threading.Event | None:
+    return _JOB_CANCEL.get(job_id)
+
+
+def clear_cancel_event(job_id: str) -> None:
+    _JOB_CANCEL.pop(job_id, None)
+
+
+def _check_not_cancelled(job_id: str) -> None:
+    ev = _JOB_CANCEL.get(job_id)
+    if ev and ev.is_set():
+        raise PipelineCancelledError("Cancelled by user.")
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _conda_run(env_name: str, cmd: list[str], cwd: Path,
-               timeout: int = 7200) -> subprocess.CompletedProcess:
-    """Runs a command inside the specified conda environment (shell=False)."""
-    import os
-    conda_bin = CONDA_BASE / "envs" / env_name / "bin"
-    env = os.environ.copy()
-    env["PATH"] = str(conda_bin) + ":" + env["PATH"]
-    env["CONDA_PREFIX"] = str(CONDA_BASE / "envs" / env_name)
-    return subprocess.run(
-        cmd, cwd=str(cwd), env=env,
-        capture_output=True, text=True, timeout=timeout,
-    )
-
-
 def _run(cmd: list[str], cwd: Path, timeout: int = 3600,
          env_name: str = None) -> tuple[int, str, str]:
-    """Runs a command; returns (returncode, stdout, stderr)."""
+    """
+    Runs a command and returns (returncode, stdout, stderr).
+    Polls every 5 s so a cancel event can interrupt a long-running subprocess.
+    """
+    import os
+    job_id    = getattr(_thread_local, "job_id", None)
+    cancel_ev = _JOB_CANCEL.get(job_id) if job_id else None
+
+    env = os.environ.copy()
+    if env_name:
+        conda_bin = CONDA_BASE / "envs" / env_name / "bin"
+        env["PATH"] = str(conda_bin) + ":" + env["PATH"]
+        env["CONDA_PREFIX"] = str(CONDA_BASE / "envs" / env_name)
+
     try:
-        if env_name:
-            result = _conda_run(env_name, cmd, cwd, timeout)
-        else:
-            import os
-            result = subprocess.run(
-                cmd, cwd=str(cwd), capture_output=True,
-                text=True, timeout=timeout, env=os.environ.copy()
-            )
-        return result.returncode, result.stdout, result.stderr
-    except subprocess.TimeoutExpired:
-        return -1, "", f"Tool timed out after {timeout}s"
+        proc = subprocess.Popen(
+            cmd, cwd=str(cwd), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
     except FileNotFoundError as e:
         return -1, "", f"Tool not found: {e}"
+    except Exception as e:
+        return -1, "", str(e)
+
+    start = _time.monotonic()
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+            return proc.returncode, stdout, stderr
+        except subprocess.TimeoutExpired:
+            if cancel_ev and cancel_ev.is_set():
+                proc.kill()
+                proc.communicate()
+                raise PipelineCancelledError("Cancelled by user.")
+            if _time.monotonic() - start > timeout:
+                proc.kill()
+                proc.communicate()
+                return -1, "", f"Tool timed out after {timeout}s"
 
 
 # ─── Read Type Detection ──────────────────────────────────────────────────────
@@ -1291,6 +1331,10 @@ def run_pipeline(job_id: str, fastq_path: Path,
     Runs the full pipeline. Returns a dict with all results.
     On failure, sets status to 'failed' in the DB and returns {'error': ...}.
     """
+    # Thread-local job_id lets _run() find the cancel event without parameter threading
+    _thread_local.job_id = job_id
+    register_cancel_event(job_id)
+
     out_dir = RESULTS_DIR / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1473,12 +1517,22 @@ def run_pipeline(job_id: str, fastq_path: Path,
         db.update_job_status(job_id, "ai_pending")
         return results
 
+    except PipelineCancelledError:
+        logger.info("[%s] Pipeline cancelled by user.", job_id)
+        db.update_job_status(job_id, "cancelled", error="Cancelled by user.")
+        results["error"] = "Cancelled by user."
+        return results
+
     except Exception as exc:
         error_msg = str(exc)
         logger.error("[%s] Pipeline error: %s", job_id, error_msg, exc_info=True)
         db.update_job_status(job_id, "failed", error=error_msg)
         results["error"] = error_msg
         return results
+
+    finally:
+        clear_cancel_event(job_id)
+        _thread_local.job_id = None
 
 
 # ─── QC (kept here for import by stage_assembly caller) ───────────────────────
