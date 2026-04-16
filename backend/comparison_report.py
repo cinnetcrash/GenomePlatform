@@ -199,7 +199,8 @@ def _summary_table(samples: list[dict]) -> str:
         "</tr></thead><tbody>",
     ]
     for i, s in enumerate(samples):
-        bg = "#ffffff" if i % 2 == 0 else "#f8fafc"
+        is_ref = s.get("is_reference", False)
+        bg = "#f0f9ff" if is_ref else ("#ffffff" if i % 2 == 0 else "#f8fafc")
         td = f"padding:.55rem .8rem;border-bottom:1px solid #f1f5f9;background:{bg}"
 
         st_str = f"ST{s['mlst_st']}" if s['mlst_st'] not in ("—", "", None) else "—"
@@ -219,9 +220,12 @@ def _summary_table(samples: list[dict]) -> str:
         amr_bg    = "#fef2f2" if amr_count > 5 else ("#fffbeb" if amr_count > 0 else "#f0fdf4")
         pf_count  = len(s.get("pf_replicons", []))
 
+        ref_badge = (" <span style='background:#dbeafe;color:#1d4ed8;border-radius:4px;"
+                     "padding:.05rem .35rem;font-size:.68rem;font-weight:600'>REF</span>"
+                     if is_ref else "")
         rows.append(
             f"<tr>"
-            f"<td style='{td};font-weight:600'>{s['sample_name']}</td>"
+            f"<td style='{td};font-weight:600'>{s['sample_name']}{ref_badge}</td>"
             f"<td style='{td};font-style:italic;color:#374151'>{s['organism']}</td>"
             f"<td style='{td}'><code style='font-size:.8rem'>{mlst_str}</code></td>"
             f"<td style='{td}'>{s['serotype']}</td>"

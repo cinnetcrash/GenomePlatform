@@ -122,9 +122,15 @@
       <div id="compare-bar"
            class="hidden px-6 py-3 border-t border-indigo-100 bg-indigo-50
                   flex items-center justify-between gap-4 flex-shrink-0 rounded-b-2xl">
-        <span class="text-sm text-indigo-700 font-medium">
-          <span id="compare-count">0</span> samples selected for comparison
-        </span>
+        <div class="flex items-center gap-4 flex-wrap">
+          <span class="text-sm text-indigo-700 font-medium">
+            <span id="compare-count">0</span> samples selected
+          </span>
+          <label class="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer select-none">
+            <input type="checkbox" id="ncbi-ref-checkbox" class="w-3.5 h-3.5 accent-indigo-600">
+            Include 5 closest NCBI reference genomes
+          </label>
+        </div>
         <div class="flex gap-2">
           <button onclick="_selectedForCompare.clear();_updateCompareBar();renderHistory(window._lastHistoryData||[])"
                   class="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-800
@@ -1207,10 +1213,11 @@ async function startComparison() {
   btn.disabled = true;
   btn.textContent = 'Starting…';
   try {
+    const includeNcbi = document.getElementById('ncbi-ref-checkbox')?.checked || false;
     const res  = await fetch('/compare', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({job_ids: ids}),
+      body: JSON.stringify({job_ids: ids, include_ncbi: includeNcbi}),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Failed');

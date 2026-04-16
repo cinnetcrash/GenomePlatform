@@ -579,12 +579,13 @@ async def start_comparison(request: Request):
             )
         valid_ids.append(jid)
 
+    include_ncbi = bool(body.get("include_ncbi", False))
     ip_hash = _ip_hash(request)
     comp_id = generate_job_id()
     db.create_comparison(comp_id, valid_ids, ip_hash)
 
     def _bg():
-        run_comparison(comp_id, valid_ids)
+        run_comparison(comp_id, valid_ids, include_ncbi=include_ncbi)
 
     threading.Thread(target=_bg, daemon=True).start()
     logger.info("Comparison %s started for %d jobs", comp_id, len(valid_ids))
