@@ -547,13 +547,14 @@ def stage_host_depletion(job_id: str, fastq_r1: Path, out_dir: Path,
 # ─── Assembly (Illumina + MinION / Autocycler) ────────────────────────────────
 
 def _run_flye(fastq: Path, out_dir: Path, mode: str, timeout: int = 10800,
-              genome_size: str = "5m") -> Path | None:
+              genome_size: str = "5m", threads: int | None = None) -> Path | None:
     """Runs Flye with the given mode flag; returns assembly FASTA path or None."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    n_threads = threads if threads is not None else ASSEMBLY_THREADS
     cmd = [
         "flye", mode, sanitize_path(fastq),
         "--out-dir",     str(out_dir),
-        "--threads",     str(ASSEMBLY_THREADS),
+        "--threads",     str(n_threads),
         "--genome-size", genome_size,
         "--no-alt-contigs",          # skip alternative contigs — saves time/memory
     ]
@@ -695,11 +696,43 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
         gsize = _estimate_genome_size(kraken2)
         logger.info("[%s] Assembly: Flye genome-size estimate: %s", job_id, gsize)
 
-        logger.info("[%s] Assembly: running Flye --nano-raw", job_id)
-        flye_raw = _run_flye(fastq, asm_dir / "flye_raw", "--nano-raw", genome_size=gsize)
+        # Run --nano-raw and --nano-hq in parallel — each gets half the thread
+        # budget.  Wall-clock time = max(raw, hq) instead of raw + hq.
+        half_threads = max(1, ASSEMBLY_THREADS // 2)
 
-        logger.info("[%s] Assembly: running Flye --nano-hq", job_id)
-        flye_hq  = _run_flye(fastq, asm_dir / "flye_hq",  "--nano-hq",  genome_size=gsize)
+        flye_raw: Path | None = None
+        flye_hq:  Path | None = None
+        _exc: list[Exception] = []
+
+        def _run_raw():
+            try:
+                nonlocal flye_raw
+                flye_raw = _run_flye(
+                    fastq, asm_dir / "flye_raw", "--nano-raw",
+                    genome_size=gsize, threads=half_threads,
+                )
+            except Exception as e:
+                _exc.append(e)
+
+        def _run_hq():
+            try:
+                nonlocal flye_hq
+                flye_hq = _run_flye(
+                    fastq, asm_dir / "flye_hq", "--nano-hq",
+                    genome_size=gsize, threads=half_threads,
+                )
+            except Exception as e:
+                _exc.append(e)
+
+        t_raw = threading.Thread(target=_run_raw, daemon=True)
+        t_hq  = threading.Thread(target=_run_hq,  daemon=True)
+        logger.info("[%s] Assembly: launching Flye --nano-raw and --nano-hq in parallel "
+                    "(%d threads each)", job_id, half_threads)
+        t_raw.start(); t_hq.start()
+        t_raw.join();  t_hq.join()
+
+        if _exc:
+            logger.warning("[%s] Flye parallel run exception: %s", job_id, _exc[0])
 
         available = [f for f in [flye_raw, flye_hq] if f]
         if len(available) >= 2:

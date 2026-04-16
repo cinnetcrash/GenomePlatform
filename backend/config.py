@@ -28,8 +28,9 @@ ASSEMBLY_THREADS = max(1, _total_cpus - _reserve)
 print(f"[config] CPU budget: {MAX_THREADS}/{_total_cpus} threads (reserve {_reserve})")
 
 # === Assembly Tuning ===
-# Shovill assembler backend: "spades" (accurate) or "megahit" (2-3x faster, slightly lower quality)
-SHOVILL_ASSEMBLER = os.getenv("SHOVILL_ASSEMBLER", "spades")
+# Shovill assembler backend: "megahit" (2-3x faster, good quality) or "spades" (slower, marginally better)
+# megahit is the default — switch to spades via env var if higher accuracy is needed.
+SHOVILL_ASSEMBLER = os.getenv("SHOVILL_ASSEMBLER", "megahit")
 
 # Flye assembly coverage cap (0 = use all reads).
 # For high-coverage MinION data (>100x), capping at 50x gives similar quality
