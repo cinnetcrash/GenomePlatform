@@ -66,8 +66,6 @@ TOOLS = {
     "mlst":      "mlst",
     "amrfinder": "amrfinder",
     "bakta":     "bakta",
-    "mafft":     str(CONDA_BASE / "bin" / "mafft"),
-    "primer3":   "/usr/bin/primer3_core",
 }
 
 # === Standalone Binaries ===

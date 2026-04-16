@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="LycianWay — Automated bacterial genomic analysis with AI interpretation and PCR primer design. Upload a FASTQ, get a clinical report.">
+  <meta name="description" content="LycianWay — Automated bacterial genomic analysis with AI interpretation. Upload a FASTQ, get a clinical report.">
   <meta property="og:title" content="LycianWay">
   <meta property="og:description" content="Upload a FASTQ. Get a clinical genomic report in minutes.">
   <meta property="og:type" content="website">
@@ -116,8 +116,8 @@
 
     <p class="fade-in fade-in-2 text-xl text-slate-500 max-w-2xl mx-auto mb-10 leading-relaxed">
       GenomePlatform automates bacterial genome assembly, AMR profiling,
-      MLST typing, AI interpretation, and PCR primer design — all from a
-      single FASTQ file. No coding required.
+      MLST typing, and AI interpretation — all from a single FASTQ file.
+      No coding required.
     </p>
 
     <div class="fade-in fade-in-3 flex flex-col sm:flex-row gap-4 justify-center">
@@ -208,15 +208,6 @@
         </p>
       </div>
 
-      <div class="card-hover bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
-        <div class="w-12 h-12 bg-teal-50 rounded-xl flex items-center justify-center text-2xl mb-4">🧪</div>
-        <h3 class="font-bold text-slate-800 text-lg mb-2">PCR Primer Design</h3>
-        <p class="text-slate-500 text-sm leading-relaxed">
-          MAFFT alignment identifies conserved regions. Primer3 designs
-          optimised primer pairs (Tm, GC%, amplicon size) for each
-          resistance gene.
-        </p>
-      </div>
     </div>
   </div>
 </section>
@@ -267,13 +258,6 @@
             <div class="text-slate-500 text-sm mt-0.5">Claude synthesises findings → clinical report</div>
           </div>
         </div>
-        <div class="pipeline-line flex items-start gap-4">
-          <div class="w-10 h-10 rounded-full bg-teal-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">6</div>
-          <div>
-            <div class="font-semibold text-slate-800">PCR Primer Design</div>
-            <div class="text-slate-500 text-sm mt-0.5">MAFFT → conserved regions → Primer3</div>
-          </div>
-        </div>
       </div>
 
       <!-- Example report preview -->
@@ -298,12 +282,6 @@
             <div class="text-red-400 font-bold">  ⚠  HIGH RISK</div>
             <div class="text-slate-300 text-xs mt-1">  ESBL-producing pandemic clone</div>
             <div class="text-slate-300 text-xs">  Consider carbapenem therapy</div>
-          </div>
-          <div class="border-t border-slate-700 pt-3">
-            <div class="text-slate-400 text-xs mb-2">PCR PRIMERS (CTX-M-15)</div>
-            <div class="text-cyan-400 text-xs">  FWD 5'-ATGAGCAAATTATGCCTG-3'</div>
-            <div class="text-cyan-400 text-xs">  REV 5'-TCAGCGCTTGTCTCGCTA-3'</div>
-            <div class="text-slate-400 text-xs">  Amplicon: 621 bp · Tm: 58.2°C</div>
           </div>
         </div>
       </div>
@@ -393,7 +371,7 @@ bash start.sh</code></pre>
             Open <code class="bg-slate-100 px-1.5 py-0.5 rounded">http://localhost:8000</code>,
             drag and drop your FASTQ file, and the pipeline starts automatically.
             You'll receive a detailed HTML report with QC metrics, AMR profile,
-            AI interpretation, and primer sequences.
+            and AI interpretation.
           </p>
         </div>
       </div>
@@ -463,7 +441,7 @@ bash start.sh</code></pre>
       </div>
     </div>
     <div class="border-t border-slate-800 pt-6 text-center text-xs text-slate-600">
-      LycianWay v0.1 · MIT License · Built with FastAPI, Claude AI, Primer3, MAFFT
+      LycianWay v0.1 · MIT License · Built with FastAPI, Claude AI
     </div>
   </div>
 </footer>

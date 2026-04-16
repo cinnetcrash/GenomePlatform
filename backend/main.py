@@ -52,7 +52,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title="LycianWay",
-    description="Automated bacterial genomic analysis and PCR primer design platform",
+    description="Automated bacterial genomic analysis platform",
     version="0.1.0",
     docs_url=None,
     redoc_url=None,
