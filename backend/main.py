@@ -4,6 +4,7 @@ Secure FASTQ upload, pipeline triggering, status polling, report download.
 """
 import collections
 import hashlib
+import json
 import logging
 import re
 import sys
@@ -32,6 +33,7 @@ from config import (
 )
 from errors import PipelineError
 from pipeline import run_pipeline, get_cancel_event, PipelineCancelledError
+from phylo_pipeline import run_phylo
 from comparison_pipeline import run_comparison
 from report_generator import generate_html_report, save_report
 from ai_interpreter import interpret, explain_error
@@ -652,4 +654,108 @@ async def comparison_report(comp_id: str):
     rp = Path(comp["report_path"])
     if not rp.exists():
         raise HTTPException(status_code=404, detail="Report file not found.")
+    return HTMLResponse(content=rp.read_text(encoding="utf-8"))
+
+
+# ─── Global Phylogeny ─────────────────────────────────────────────────────────
+
+@app.get("/phylo", response_class=HTMLResponse)
+async def phylo_page(request: Request):
+    return templates.TemplateResponse("phylo.html", {"request": request})
+
+
+@app.post("/phylo/start")
+@limiter.limit("5/minute")
+async def start_phylo(
+    request: Request,
+    job_ids: str = Form(...),
+    metadata: Optional[UploadFile] = File(default=None),
+):
+    ip_hash = _ip_hash(request)
+
+    if db.count_active_phylo_for_ip(ip_hash) >= 1:
+        raise HTTPException(
+            status_code=429,
+            detail="You already have an active phylogeny analysis running."
+        )
+
+    try:
+        ids = json.loads(job_ids)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=400, detail="job_ids must be a JSON array.")
+
+    if not isinstance(ids, list) or len(ids) < 2:
+        raise HTTPException(status_code=400, detail="Provide at least 2 job IDs.")
+    if len(ids) > 30:
+        raise HTTPException(status_code=400, detail="Maximum 30 samples per phylogeny run.")
+
+    for jid in ids:
+        if not re.fullmatch(r"[0-9a-f]{32}", jid):
+            raise HTTPException(status_code=400, detail=f"Invalid job ID: {jid}")
+        job = db.get_job(jid)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {jid} not found.")
+        if job["status"] != "completed":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {jid} is not completed (status: {job['status']})."
+            )
+
+    phylo_id  = generate_job_id()
+    meta_path = None
+
+    if metadata and metadata.filename:
+        from pathlib import Path as _Path
+        out_dir = RESULTS_DIR.parent / "phylo" / phylo_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        meta_path = out_dir / "user_metadata.csv"
+        content = await metadata.read()
+        meta_path.write_bytes(content)
+
+    db.create_phylo_run(phylo_id, ids, ip_hash)
+
+    def _bg():
+        run_phylo(phylo_id, ids, metadata_csv_path=meta_path)
+
+    threading.Thread(target=_bg, daemon=True,
+                     name=f"phylo-{phylo_id[:8]}").start()
+    logger.info("Phylo run %s started for %d jobs", phylo_id, len(ids))
+
+    return JSONResponse({
+        "phylo_id": phylo_id,
+        "message":  "Global phylogeny analysis started.",
+    })
+
+
+@app.get("/phylo/{phylo_id}/status")
+async def phylo_status(phylo_id: str):
+    if not re.fullmatch(r"[0-9a-f]{32}", phylo_id):
+        raise HTTPException(status_code=400, detail="Invalid phylo ID.")
+    run = db.get_phylo_run(phylo_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Phylo run not found.")
+    stages = json.loads(run["stages"]) if run.get("stages") else {}
+    return JSONResponse({
+        "phylo_id":   run["id"],
+        "status":     run["status"],
+        "organism":   run["organism"],
+        "stages":     stages,
+        "error":      run["error"],
+        "error_code": run.get("error_code"),
+        "has_report": bool(run["report_path"]),
+    })
+
+
+@app.get("/phylo/{phylo_id}/report", response_class=HTMLResponse)
+async def phylo_report(phylo_id: str):
+    if not re.fullmatch(r"[0-9a-f]{32}", phylo_id):
+        raise HTTPException(status_code=400, detail="Invalid phylo ID.")
+    run = db.get_phylo_run(phylo_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Phylo run not found.")
+    if not run["report_path"]:
+        raise HTTPException(status_code=404, detail="Report not ready yet.")
+    rp = Path(run["report_path"])
+    if not rp.exists():
+        raise HTTPException(status_code=410, detail="Report file deleted.")
     return HTMLResponse(content=rp.read_text(encoding="utf-8"))

@@ -46,9 +46,24 @@ def init_db() -> None:
                 error       TEXT
             );
 
-            CREATE INDEX IF NOT EXISTS idx_expires ON jobs(expires_at);
-            CREATE INDEX IF NOT EXISTS idx_ip      ON jobs(ip_hash);
-            CREATE INDEX IF NOT EXISTS idx_cmp_ip  ON comparisons(ip_hash);
+            CREATE TABLE IF NOT EXISTS phylo_runs (
+                id           TEXT PRIMARY KEY,
+                status       TEXT NOT NULL DEFAULT 'queued',
+                created_at   TEXT NOT NULL,
+                ip_hash      TEXT NOT NULL,
+                job_ids      TEXT NOT NULL,
+                organism     TEXT,
+                stages       TEXT DEFAULT '{}',
+                report_path  TEXT,
+                error        TEXT,
+                error_code   TEXT,
+                error_detail TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_expires  ON jobs(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_ip       ON jobs(ip_hash);
+            CREATE INDEX IF NOT EXISTS idx_cmp_ip   ON comparisons(ip_hash);
+            CREATE INDEX IF NOT EXISTS idx_phylo_ip ON phylo_runs(ip_hash);
         """)
         # Migrate existing databases — safe no-op if column already present
         try:
@@ -279,6 +294,55 @@ def count_active_jobs_for_ip(ip_hash: str) -> int:
         row = conn.execute(
             """SELECT COUNT(*) as n FROM jobs
                WHERE ip_hash = ? AND status NOT IN ('completed','failed','deleted','cancelled')""",
+            (ip_hash,)
+        ).fetchone()
+    return row["n"] if row else 0
+
+
+# ─── Phylo run helpers ────────────────────────────────────────────────────────
+
+def create_phylo_run(phylo_id: str, job_ids: list[str], ip_hash: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO phylo_runs (id, job_ids, status, created_at, ip_hash)
+               VALUES (?, ?, 'queued', ?, ?)""",
+            (phylo_id, json.dumps(job_ids), now, ip_hash)
+        )
+
+
+def update_phylo_run(phylo_id: str, status: str = None,
+                     organism: str = None, report_path: str = None,
+                     error: str = None, error_code: str = None,
+                     error_detail: str = None, stages: dict = None) -> None:
+    fields, vals = [], []
+    if status       is not None: fields.append("status = ?");       vals.append(status)
+    if organism     is not None: fields.append("organism = ?");     vals.append(organism)
+    if report_path  is not None: fields.append("report_path = ?");  vals.append(report_path)
+    if error        is not None: fields.append("error = ?");        vals.append(error)
+    if error_code   is not None: fields.append("error_code = ?");   vals.append(error_code)
+    if error_detail is not None: fields.append("error_detail = ?"); vals.append(error_detail)
+    if stages       is not None: fields.append("stages = ?");       vals.append(json.dumps(stages))
+    if not fields:
+        return
+    vals.append(phylo_id)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE phylo_runs SET {', '.join(fields)} WHERE id = ?", vals)
+
+
+def get_phylo_run(phylo_id: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM phylo_runs WHERE id = ?", (phylo_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def count_active_phylo_for_ip(ip_hash: str) -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) as n FROM phylo_runs
+               WHERE ip_hash = ? AND status NOT IN ('completed','failed','cancelled')""",
             (ip_hash,)
         ).fetchone()
     return row["n"] if row else 0
