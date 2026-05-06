@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Global Filogeni — LycianWay</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+<nav class="bg-white border-b border-slate-100 px-6 py-3 flex gap-6 items-center shadow-sm">
+  <a href="/" class="font-bold text-indigo-600 text-lg">🧬 LycianWay</a>
+  <a href="/" class="text-sm text-slate-500 hover:text-slate-700">Analiz</a>
+  <a href="/phylo" class="text-sm font-semibold text-indigo-600">🌍 Global Filogeni</a>
+</nav>
+
+<main class="max-w-3xl mx-auto px-4 py-10">
+  <h1 class="text-2xl font-bold mb-1">🌍 Global Filogeni Analizi</h1>
+  <p class="text-slate-500 mb-8 text-sm">
+    Seçilen örnekler + NCBI referans genomlar (ülke başına 1) üzerinden
+    Panaroo pan-genom ve IQ-TREE maksimum likelihood filogeni analizi.
+    <strong>Süre: 45–90 dakika.</strong>
+  </p>
+
+  <!-- Job Selection -->
+  <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mb-6">
+    <h2 class="font-semibold text-base mb-1">1. Örnek Seçimi</h2>
+    <p class="text-xs text-slate-500 mb-3">
+      Yalnızca tamamlanmış analizler listelenir. En az 2, en fazla 30 örnek seçin.
+    </p>
+    <div id="job-list" class="space-y-2 max-h-72 overflow-y-auto"></div>
+    <p id="no-jobs" class="text-slate-400 text-sm hidden">Tamamlanmış analiz bulunamadı.</p>
+  </div>
+
+  <!-- Metadata CSV -->
+  <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mb-6">
+    <h2 class="font-semibold text-base mb-1">2. Metadata CSV (opsiyonel)</h2>
+    <p class="text-xs text-slate-500 mb-3">
+      Kolonlar:
+      <code class="bg-slate-100 px-1 rounded">sample_id, country, year, mlst_st, amr_profile, source, host</code><br>
+      <code>sample_id</code> = job ID'nin ilk 8 karakteri.
+      Yüklemezseniz MLST ve AMR bilgileri otomatik doldurulur, diğer alanlar boş kalır.
+    </p>
+    <input type="file" id="meta-file" accept=".csv"
+           class="text-sm text-slate-600 file:mr-3 file:py-1.5 file:px-3
+                  file:rounded-lg file:border-0 file:text-sm file:font-medium
+                  file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+  </div>
+
+  <!-- Start button -->
+  <button id="start-btn" onclick="startPhylo()"
+          class="w-full py-3 rounded-xl bg-indigo-600 text-white font-semibold
+                 text-sm hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">
+    Analizi Başlat
+  </button>
+
+  <!-- Progress -->
+  <div id="progress-card" class="hidden bg-white rounded-2xl shadow-sm border border-slate-100 p-6 mt-6">
+    <h2 class="font-semibold text-base mb-4">İlerleme</h2>
+    <div id="stages"></div>
+    <div id="error-box" class="hidden mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700"></div>
+    <a id="report-link" href="#" target="_blank"
+       class="hidden mt-4 inline-block py-2 px-4 rounded-lg
+              bg-green-600 text-white text-sm font-medium hover:bg-green-700">
+      📄 Raporu Görüntüle
+    </a>
+  </div>
+</main>
+
+<script>
+const STAGE_LABELS = {
+  organism: '1. Organizma Tespiti',
+  ncbi:     '2. NCBI Referans Genomlar',
+  panaroo:  '3. Panaroo Pan-Genom',
+  iqtree:   '4. IQ-TREE Filogeni',
+  r:        '5. R/ggtree Annotasyon',
+  report:   '6. Rapor Oluşturma',
+};
+
+async function loadJobs() {
+  try {
+    const res  = await fetch('/history');
+    const data = await res.json();
+    const jobs = (data.jobs || []).filter(j => j.status === 'completed');
+    const list = document.getElementById('job-list');
+    if (!jobs.length) {
+      document.getElementById('no-jobs').classList.remove('hidden');
+      return;
+    }
+    jobs.forEach(j => {
+      const div = document.createElement('label');
+      div.className = 'flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer';
+      div.innerHTML = `
+        <input type="checkbox" value="${j.id}" class="job-cb rounded">
+        <span class="text-sm font-mono text-slate-500">${j.id.slice(0,8)}</span>
+        <span class="text-sm text-slate-700 truncate flex-1">${j.filename}</span>
+        <span class="text-xs text-slate-400 shrink-0">${j.created_at.slice(0,10)}</span>`;
+      list.appendChild(div);
+    });
+  } catch(e) {
+    document.getElementById('no-jobs').textContent = 'İş listesi yüklenemedi.';
+    document.getElementById('no-jobs').classList.remove('hidden');
+  }
+}
+
+async function startPhylo() {
+  const checked = [...document.querySelectorAll('.job-cb:checked')].map(cb => cb.value);
+  if (checked.length < 2) { alert('En az 2 örnek seçin.'); return; }
+  if (checked.length > 30) { alert('En fazla 30 örnek seçebilirsiniz.'); return; }
+
+  const btn = document.getElementById('start-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Başlatılıyor…';
+
+  const fd = new FormData();
+  fd.append('job_ids', JSON.stringify(checked));
+  const metaFile = document.getElementById('meta-file').files[0];
+  if (metaFile) fd.append('metadata', metaFile);
+
+  try {
+    const res  = await fetch('/phylo/start', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.detail || 'Hata oluştu.');
+      btn.disabled = false;
+      btn.textContent = 'Analizi Başlat';
+      return;
+    }
+    document.getElementById('progress-card').classList.remove('hidden');
+    pollStatus(data.phylo_id);
+  } catch(e) {
+    alert('Sunucuya bağlanılamadı.');
+    btn.disabled = false;
+    btn.textContent = 'Analizi Başlat';
+  }
+}
+
+async function pollStatus(phyloId) {
+  try {
+    const res  = await fetch(`/phylo/${phyloId}/status`);
+    const data = await res.json();
+    renderStages(data.stages || {});
+
+    if (data.status === 'completed') {
+      document.getElementById('report-link').href = `/phylo/${phyloId}/report`;
+      document.getElementById('report-link').classList.remove('hidden');
+      return;
+    }
+    if (data.status === 'failed') {
+      const box = document.getElementById('error-box');
+      box.textContent = `Hata${data.error_code ? ' [' + data.error_code + ']' : ''}: ${data.error || 'Bilinmiyor'}`;
+      box.classList.remove('hidden');
+      return;
+    }
+  } catch(e) { /* ignore network errors, keep polling */ }
+  setTimeout(() => pollStatus(phyloId), 5000);
+}
+
+function renderStages(stages) {
+  const icons = { done: '✅', running: '⏳', failed: '❌', pending: '⬜' };
+  document.getElementById('stages').innerHTML = Object.entries(STAGE_LABELS).map(([k, label]) => {
+    const s    = stages[k] || {};
+    const icon = icons[s.status] || icons.pending;
+    return `<div class="flex items-center gap-2 py-1.5 text-sm border-b border-slate-50 last:border-0">
+      <span class="text-base w-6 text-center">${icon}</span>
+      <span class="flex-1">${label}</span>
+      ${s.detail ? `<span class="text-xs text-slate-400">${s.detail}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+loadJobs();
+</script>
+</body>
+</html>
