@@ -413,8 +413,30 @@ def run_comparison(comp_id: str, job_ids: list[str],
             logger.warning("[cmp:%s] Not enough FASTAs for tree — metadata only", comp_id)
 
         # ── 4. Generate report ─────────────────────────────────────────────
+        from ai_interpreter import summarise_comparison
+        _sample_names = [s["sample_name"] for s in samples]
+        _mlst_types   = [s.get("mlst_st") or "—" for s in samples]
+        _amr_matrix   = {s["sample_name"]: s.get("amr_genes", []) for s in samples}
+        _closest_pair = None
+        if distances:
+            try:
+                _closest_pair = min(
+                    ((d["sample_a"], d["sample_b"], d["distance"])
+                     for d in distances if d["sample_a"] != d["sample_b"]),
+                    key=lambda x: x[2], default=None,
+                )
+            except (TypeError, ValueError):
+                _closest_pair = None
+        comparison_summary = summarise_comparison(
+            sample_names=_sample_names, mlst_types=_mlst_types,
+            amr_matrix=_amr_matrix, closest_pair=_closest_pair,
+        ) or ""
+
         from comparison_report import generate_comparison_report
-        html = generate_comparison_report(comp_id, all_samples, newick, distances)
+        html = generate_comparison_report(
+            comp_id, all_samples, newick, distances,
+            ai_summary=comparison_summary,
+        )
 
         report_path = out_dir / "comparison_report.html"
         report_path.write_text(html, encoding="utf-8")

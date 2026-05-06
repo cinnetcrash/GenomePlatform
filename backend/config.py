@@ -24,7 +24,6 @@ for d in [UPLOAD_DIR, RESULTS_DIR, LOGS_DIR]:
 _total_cpus      = multiprocessing.cpu_count()
 _reserve         = 2 if _total_cpus > 4 else 1
 MAX_THREADS      = max(1, _total_cpus - _reserve)
-ASSEMBLY_THREADS = max(1, _total_cpus - _reserve)
 print(f"[config] CPU budget: {MAX_THREADS}/{_total_cpus} threads (reserve {_reserve})")
 
 # === Assembly Tuning ===
@@ -60,6 +59,7 @@ CONDA_ENVS = {
     "assembly": "shovill",   # Shovill, SPAdes
     "bakta":    "bakta",     # Bakta annotation
     "mlst":     "mlst",      # CGE MLST
+    "r_phylo":  "r_phylo",   # R + ggtree for phylogenetic annotation
 }
 
 # === Tool Paths ===

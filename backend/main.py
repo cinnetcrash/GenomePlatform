@@ -2,8 +2,10 @@
 LycianWay — Main FastAPI Application
 Secure FASTQ upload, pipeline triggering, status polling, report download.
 """
+import collections
 import hashlib
 import logging
+import re
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -24,14 +26,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 import cleanup
 import database as db
 import system_check as sc
-from ai_interpreter import interpret
 from config import (
-    JOB_EXPIRY_HOURS, KRAKEN2_DEFAULT_DB, MAX_FILE_SIZE_MB,
+    JOB_EXPIRY_HOURS, KRAKEN2_DEFAULT_DB, LOGS_DIR, MAX_FILE_SIZE_MB,
     RATE_LIMIT, RESULTS_DIR, UPLOAD_DIR,
 )
+from errors import PipelineError
 from pipeline import run_pipeline, get_cancel_event, PipelineCancelledError
 from comparison_pipeline import run_comparison
 from report_generator import generate_html_report, save_report
+from ai_interpreter import interpret, explain_error
+import scheduler
 from security import (
     compute_md5, generate_job_id, job_upload_dir,
     validate_file_size, validate_filename, validate_magic_bytes,
@@ -115,73 +119,78 @@ def _run_full_pipeline(job_id: str, fastq_path: Path,
                        fastq_r2: Path | None = None,
                        kraken2_db: Path | None = None,
                        sample_type: str = "auto") -> None:
-    """
-    Runs the full pipeline + AI interpretation in a background thread.
-    Even on failure a partial report is generated so the user can see
-    what completed before the error.
-    """
-    logger.info("[%s] Pipeline starting: %s%s", job_id, fastq_path,
-                f" + {fastq_r2.name}" if fastq_r2 else "")
-    out_dir = RESULTS_DIR / job_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    pipeline_results: dict = {}
-    ai_results:       dict = {}
-    job_error:        str | None = None
-
-    # ── 1. Genomic pipeline ───────────────────────────────────────────────────
+    scheduler.job_start(job_id)
     try:
-        pipeline_results = run_pipeline(job_id, fastq_path,
-                                        fastq_r2=fastq_r2,
-                                        kraken2_db=kraken2_db,
-                                        sample_type=sample_type)
-        if pipeline_results.get("error"):
-            job_error = pipeline_results["error"]
-        # If pipeline was cancelled, skip AI and report generation
-        if db.get_job_status(job_id) == "cancelled":
-            logger.info("[%s] Job cancelled — skipping AI and report.", job_id)
-            return
-    except PipelineCancelledError:
-        logger.info("[%s] Pipeline cancelled.", job_id)
-        return
-    except Exception as exc:
-        logger.error("[%s] Pipeline error: %s", job_id, exc, exc_info=True)
-        job_error = str(exc)
+        logger.info("[%s] Pipeline starting: %s%s", job_id, fastq_path,
+                    f" + {fastq_r2.name}" if fastq_r2 else "")
+        out_dir = RESULTS_DIR / job_id
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── 2. AI interpretation (skip only if pipeline produced nothing) ─────────
-    if pipeline_results and not pipeline_results.get("error"):
+        pipeline_results: dict = {}
+        ai_results:       dict = {}
+        job_error:        str | None = None
+
+        # ── 1. Genomic pipeline ───────────────────────────────────────────────────
         try:
-            db.update_stage(job_id, "ai", "running")
-            ai_results = interpret(pipeline_results)
-            db.update_stage(job_id, "ai", "done")
+            pipeline_results = run_pipeline(job_id, fastq_path,
+                                            fastq_r2=fastq_r2,
+                                            kraken2_db=kraken2_db,
+                                            sample_type=sample_type)
+            if pipeline_results.get("error"):
+                job_error = pipeline_results["error"]
+            if db.get_job_status(job_id) == "cancelled":
+                logger.info("[%s] Job cancelled — skipping AI and report.", job_id)
+                return
+        except PipelineCancelledError:
+            logger.info("[%s] Pipeline cancelled.", job_id)
+            return
+        except PipelineError as exc:
+            logger.error("[%s] Pipeline error %s: %s", job_id, exc.code, exc, exc_info=True)
+            job_error = str(exc)
+            pipeline_results["error_explanation"] = explain_error(
+                error_code=exc.code, stage=exc.stage, detail=exc.detail,
+            ) or ""
+            db.update_job_status(job_id, "failed", error=str(exc),
+                                 error_code=exc.code, error_detail=exc.detail)
         except Exception as exc:
-            logger.error("[%s] AI error: %s", job_id, exc, exc_info=True)
-            ai_results = {
-                "summary": f"AI interpretation failed: {exc}",
-                "risk_level": "UNKNOWN",
-            }
-            db.update_stage(job_id, "ai", "failed", str(exc))
-            # Not a fatal error — continue to report
+            logger.error("[%s] Pipeline error: %s", job_id, exc, exc_info=True)
+            job_error = str(exc)
 
-    # ── 3. Generate report (always, even on partial/failed pipelines) ─────────
-    try:
-        db.update_stage(job_id, "report", "running")
-        html = generate_html_report(job_id, pipeline_results, ai_results,
-                                    job_error=job_error)
-        report_path = save_report(job_id, html, out_dir)
-        db.update_stage(job_id, "report", "done")
+        # ── 2. AI interpretation (skip only if pipeline produced nothing) ─────────
+        if pipeline_results and not pipeline_results.get("error"):
+            try:
+                db.update_stage(job_id, "ai", "running")
+                ai_results = interpret(pipeline_results)
+                db.update_stage(job_id, "ai", "done")
+            except Exception as exc:
+                logger.error("[%s] AI error: %s", job_id, exc, exc_info=True)
+                ai_results = {
+                    "summary": f"AI interpretation failed: {exc}",
+                    "risk_level": "UNKNOWN",
+                }
+                db.update_stage(job_id, "ai", "failed", str(exc))
 
-        final_status = "failed" if job_error else "completed"
-        db.update_job_status(job_id, final_status,
-                             report_path=str(report_path),
-                             error=job_error)
-        logger.info("[%s] %s. Report: %s", job_id,
-                    "Failed (partial report)" if job_error else "Completed",
-                    report_path)
+        # ── 3. Generate report (always, even on partial/failed pipelines) ─────────
+        try:
+            db.update_stage(job_id, "report", "running")
+            html = generate_html_report(job_id, pipeline_results, ai_results,
+                                        job_error=job_error)
+            report_path = save_report(job_id, html, out_dir)
+            db.update_stage(job_id, "report", "done")
 
-    except Exception as exc:
-        logger.error("[%s] Report generation error: %s", job_id, exc, exc_info=True)
-        db.update_job_status(job_id, "failed", error=str(exc))
+            final_status = "failed" if job_error else "completed"
+            db.update_job_status(job_id, final_status,
+                                 report_path=str(report_path),
+                                 error=job_error)
+            logger.info("[%s] %s. Report: %s", job_id,
+                        "Failed (partial report)" if job_error else "Completed",
+                        report_path)
+
+        except Exception as exc:
+            logger.error("[%s] Report generation error: %s", job_id, exc, exc_info=True)
+            db.update_job_status(job_id, "failed", error=str(exc))
+    finally:
+        scheduler.job_done(job_id)
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -369,8 +378,10 @@ async def job_status(request: Request, job_id: str):
         "created_at": job["created_at"],
         "expires_at": job["expires_at"],
         "stages":     stages,
-        "error":      job["error"],
-        "has_report": bool(job["report_path"]),
+        "error":        job["error"],
+        "error_code":   job.get("error_code"),
+        "error_detail": job.get("error_detail"),
+        "has_report":   bool(job["report_path"]),
     })
 
 
@@ -542,6 +553,28 @@ async def system_stats():
 async def system_check():
     """Scans installed tools and databases; reports what is present or missing."""
     return JSONResponse(sc.run_system_check())
+
+
+@app.get("/logs/{job_id}")
+async def job_logs(job_id: str, last: int = 200):
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise HTTPException(status_code=400, detail="Invalid job ID.")
+    job = db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    last = min(last, 1000)
+    tag = f"[{job_id}]"
+    buf: collections.deque[str] = collections.deque(maxlen=last)
+    try:
+        async with aiofiles.open(
+            LOGS_DIR / "app.log", encoding="utf-8", errors="replace"
+        ) as f:
+            async for line in f:
+                if tag in line:
+                    buf.append(line.rstrip())
+    except OSError:
+        pass
+    return JSONResponse({"job_id": job_id, "logs": list(buf)})
 
 
 @app.get("/health")

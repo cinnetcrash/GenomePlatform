@@ -18,13 +18,21 @@ from typing import Any
 
 import database as db
 from config import (
-    ASSEMBLY_QC, ASSEMBLY_THREADS, AUTOCYCLER_BIN, BANDAGE_BIN,
+    ASSEMBLY_QC, AUTOCYCLER_BIN, BANDAGE_BIN,
     CHECKM2_DB, CHECKV_DB, CONDA_BASE,
     FLYE_ASM_COVERAGE, HUMAN_DOMINANT_THRESHOLD,
     HOST_TAXIDS, HOST_DEPLETION_THRESHOLD, HOST_DEPLETION_MIN_READS,
-    MAX_THREADS, RESULTS_DIR, SCRIPTS_DIR,
+    RESULTS_DIR, SCRIPTS_DIR,
     SHOVILL_ASSEMBLER, VIRAL_DOMINANT_THRESHOLD,
 )
+from errors import (
+    PipelineError, ERROR_LABELS,
+    FLYE_FAILED,  # noqa: F401 — reserved for parallel Flye migration
+    SHOVILL_FAILED,
+    TOOL_NOT_FOUND, STAGE_TIMEOUT,
+)
+import scheduler
+from ai_interpreter import interpret_assembly_qc
 from security import safe_sample_name, sanitize_path
 
 logger = logging.getLogger("pipeline")
@@ -101,6 +109,34 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 3600,
                 proc.kill()
                 proc.communicate()
                 return -1, "", f"Tool timed out after {timeout}s"
+
+
+def _run_or_raise(
+    cmd: list[str], cwd: Path, *,
+    error_code: str, stage: str,
+    timeout: int = 3600, env_name: str | None = None,
+) -> tuple[str, str]:
+    """Wraps _run() and raises PipelineError on non-zero exit."""
+    rc, stdout, stderr = _run(cmd, cwd, timeout=timeout, env_name=env_name)
+    if rc != 0:
+        if "Tool not found" in stderr:
+            raise PipelineError(
+                code=TOOL_NOT_FOUND,
+                message=ERROR_LABELS[TOOL_NOT_FOUND],
+                detail=stderr[:500], stage=stage, recoverable=False,
+            )
+        if "timed out" in stderr:
+            raise PipelineError(
+                code=STAGE_TIMEOUT,
+                message=ERROR_LABELS[STAGE_TIMEOUT],
+                detail=stderr[:500], stage=stage, recoverable=True,
+            )
+        raise PipelineError(
+            code=error_code,
+            message=ERROR_LABELS.get(error_code, "Pipeline stage failed"),
+            detail=stderr[:500], stage=stage, recoverable=False,
+        )
+    return stdout, stderr
 
 
 # ─── Read Type Detection ──────────────────────────────────────────────────────
@@ -393,7 +429,7 @@ def stage_kraken2(job_id: str, fastq: Path, out_dir: Path,
     cmd = [
         "kraken2",
         "--db",      str(db_path),
-        "--threads", str(MAX_THREADS),
+        "--threads", str(scheduler.threads_for_stage()),
         "--report",  str(report_file),
         "--output",  str(output_file),
     ]
@@ -550,7 +586,7 @@ def _run_flye(fastq: Path, out_dir: Path, mode: str, timeout: int = 10800,
               genome_size: str = "5m", threads: int | None = None) -> Path | None:
     """Runs Flye with the given mode flag; returns assembly FASTA path or None."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    n_threads = threads if threads is not None else ASSEMBLY_THREADS
+    n_threads = threads if threads is not None else scheduler.threads_for_stage()
     cmd = [
         "flye", mode, sanitize_path(fastq),
         "--out-dir",     str(out_dir),
@@ -594,7 +630,7 @@ def _run_autocycler(assemblies: list[Path], out_dir: Path) -> Path | None:
     rc, _, err = _run([ac, "compress",
                        "--assemblies_dir", str(staging),
                        "--autocycler_dir",  str(ac_dir),
-                       "--threads", str(ASSEMBLY_THREADS)],
+                       "--threads", str(scheduler.threads_for_stage())],
                       ac_dir, timeout=3600)
     if rc != 0:
         logger.warning("Autocycler compress failed: %s", err[-200:])
@@ -617,7 +653,7 @@ def _run_autocycler(assemblies: list[Path], out_dir: Path) -> Path | None:
     resolved_gfas: list[str] = []
     for cd in cluster_dirs:
         _run([ac, "trim", "--cluster_dir", str(cd),
-              "--threads", str(ASSEMBLY_THREADS)], ac_dir, timeout=1800)
+              "--threads", str(scheduler.threads_for_stage())], ac_dir, timeout=1800)
         _run([ac, "resolve", "--cluster_dir", str(cd)], ac_dir, timeout=1800)
         # Resolved GFA is the highest-numbered .gfa in the cluster dir
         gfas = sorted(cd.glob("*.gfa"))
@@ -698,7 +734,7 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
 
         # Run --nano-raw and --nano-hq in parallel — each gets half the thread
         # budget.  Wall-clock time = max(raw, hq) instead of raw + hq.
-        half_threads = max(1, ASSEMBLY_THREADS // 2)
+        half_threads = max(1, scheduler.threads_for_stage() // 2)
 
         flye_raw: Path | None = None
         flye_hq:  Path | None = None
@@ -752,7 +788,7 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
             method = available[0].parent.name
         else:
             db.update_stage(job_id, "assembly", "failed", "All Flye runs failed.")
-            return None, []
+            return None, [], ""
 
     else:  # Illumina
         import psutil
@@ -767,20 +803,22 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
                 "--R1",        sanitize_path(fastq),
                 "--R2",        sanitize_path(fastq_r2),
                 "--outdir",    str(asm_dir),
-                "--cpus",      str(ASSEMBLY_THREADS),
+                "--cpus",      str(scheduler.threads_for_stage()),
                 "--ram",       str(avail_gb),
                 "--assembler", SHOVILL_ASSEMBLER,
                 "--noreadcorr",
                 "--force",
             ]
-            rc, out, err = _run(cmd, asm_dir, timeout=10800, env_name="shovill")
+            _run_or_raise(cmd, asm_dir,
+                          error_code=SHOVILL_FAILED, stage="assembly",
+                          timeout=10800, env_name="shovill")
             candidates = list(asm_dir.glob("contigs.fa")) + list(asm_dir.glob("assembly.fasta"))
             if candidates:
                 fasta  = candidates[0]
                 method = f"shovill-{SHOVILL_ASSEMBLER} (PE)"
             else:
-                db.update_stage(job_id, "assembly", "failed", err[-500:])
-                return None, []
+                db.update_stage(job_id, "assembly", "failed", "No contigs produced.")
+                return None, [], ""
 
         else:
             # ── Single-end → SPAdes directly ──────────────────────────────────
@@ -792,12 +830,14 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
                 str(spades_bin),
                 "--s1",         sanitize_path(fastq),
                 "-o",           str(spades_out),
-                "--threads",    str(ASSEMBLY_THREADS),
+                "--threads",    str(scheduler.threads_for_stage()),
                 "--memory",     str(avail_gb),
                 "--only-assembler",   # fastp already did QC
                 "--cov-cutoff",  "auto",
             ]
-            rc, out, err = _run(cmd, spades_out, timeout=10800, env_name="shovill")
+            _run_or_raise(cmd, spades_out,
+                          error_code=SHOVILL_FAILED, stage="assembly",
+                          timeout=10800, env_name="shovill")
             # SPAdes outputs contigs.fasta
             candidates = list(spades_out.glob("contigs.fasta")) + \
                          list(spades_out.glob("scaffolds.fasta"))
@@ -808,8 +848,8 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
                 _shutil.copy2(candidates[0], fasta)
                 method = "spades-se"
             else:
-                db.update_stage(job_id, "assembly", "failed", err[-500:])
-                return None, []
+                db.update_stage(job_id, "assembly", "failed", "No contigs produced.")
+                return None, [], ""
 
     # Compute and store stats
     try:
@@ -834,7 +874,9 @@ def stage_assembly(job_id: str, fastq: Path, out_dir: Path,
     detail = {**stats, "fasta_path": str(fasta), "method": method,
               "qc_checks": qc_checks}
     db.update_stage(job_id, "assembly", "done", json.dumps(detail))
-    return fasta, qc_checks
+
+    _asm_qc_comment = interpret_assembly_qc(stats=stats, top_organism=None) or ""
+    return fasta, qc_checks, _asm_qc_comment
 
 
 # ─── Bandage Graph Visualization ─────────────────────────────────────────────
@@ -929,7 +971,7 @@ def stage_coverage(job_id: str, fasta: Path, out_dir: Path,
     # ── minimap2 → samtools sort ───────────────────────────────────────────
     mm2_cmd = [
         "minimap2", "-ax", preset,
-        "-t", str(MAX_THREADS),
+        "-t", str(scheduler.threads_for_stage()),
         sanitize_path(fasta),
         sanitize_path(fastq_r1),
     ]
@@ -944,7 +986,7 @@ def stage_coverage(job_id: str, fasta: Path, out_dir: Path,
         mm2 = subprocess.Popen(mm2_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                cwd=str(cov_dir), env=env)
         sort = subprocess.Popen(
-            ["samtools", "sort", "-@", str(MAX_THREADS), "-o", str(bam)],
+            ["samtools", "sort", "-@", str(scheduler.threads_for_stage()), "-o", str(bam)],
             stdin=mm2.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             cwd=str(cov_dir), env=env,
         )
@@ -1041,7 +1083,7 @@ def _run_ectyper(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
     eco_dir = out_dir / "serotyping" / "ectyper"
     eco_dir.mkdir(parents=True, exist_ok=True)
     cmd = ["ectyper", "-i", sanitize_path(fasta), "-o", str(eco_dir),
-           "--cores", str(MAX_THREADS)]
+           "--cores", str(scheduler.threads_for_stage())]
     rc, out, err = _run(cmd, eco_dir, timeout=1800, env_name="analiz")
 
     tsv = eco_dir / "output.tsv"
@@ -1076,7 +1118,7 @@ def _run_sistr(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
     json_out = sis_dir / "sistr_results.json"
     cmd = ["sistr", "-i", sanitize_path(fasta), "assembly",
            "-f", "json", "-o", str(json_out),
-           "--qc", "-t", str(MAX_THREADS)]
+           "--qc", "-t", str(scheduler.threads_for_stage())]
     rc, out, err = _run(cmd, sis_dir, timeout=1800, env_name="sistr")
 
     result: dict[str, Any] = {"tool": "SISTR"}
@@ -1204,7 +1246,7 @@ def stage_amr(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
         "amrfinder",
         "--nucleotide", sanitize_path(fasta),
         "--output",     str(amr_out),
-        "--threads",    str(MAX_THREADS),
+        "--threads",    str(scheduler.threads_for_stage()),
         "--plus",
     ]
     rc, out, err = _run(cmd, amr_dir)
@@ -1374,7 +1416,7 @@ def stage_quast(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
     cmd = [
         "quast.py", sanitize_path(fasta),
         "-o", str(q_dir),
-        "--threads", str(MAX_THREADS),
+        "--threads", str(scheduler.threads_for_stage()),
         "--no-html", "--no-plots",
     ]
     rc, out_s, err_s = _run(cmd, q_dir, timeout=1800, env_name="quast5")
@@ -1430,7 +1472,7 @@ def stage_checkm2(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
         "checkm2", "predict",
         "--input",            str(fasta_dir),
         "--output-directory", str(cm_dir),
-        "--threads",          str(MAX_THREADS),
+        "--threads",          str(scheduler.threads_for_stage()),
         "--database_path",    str(CHECKM2_DB),
         "--force",
         "-x", fasta.suffix.lstrip("."),
@@ -1471,7 +1513,7 @@ def stage_checkv(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
     # CheckV will use its internal database if --db not specified
     cmd = ["checkv", "end_to_end",
            sanitize_path(fasta), str(cv_dir),
-           "-t", str(MAX_THREADS)]
+           "-t", str(scheduler.threads_for_stage())]
     if CHECKV_DB.is_dir():
         cmd += ["--db", str(CHECKV_DB)]
 
@@ -1527,7 +1569,7 @@ def stage_mobsuite(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
         "mob_recon",
         "-i", sanitize_path(fasta),
         "-o", str(mob_dir),
-        "-n", str(MAX_THREADS),
+        "-n", str(scheduler.threads_for_stage()),
         "--force",
     ]
     rc, out_s, err_s = _run(cmd, mob_dir, timeout=3600, env_name="mobsuite")
@@ -1613,7 +1655,7 @@ def stage_annotation(job_id: str, fasta: Path, out_dir: Path,
         "--db",     str(CONDA_BASE / "envs" / "bakta" / "db"),
         "--output", str(ann_dir),
         "--prefix", safe_sample_name(sample_name),
-        "--threads", str(MAX_THREADS),
+        "--threads", str(scheduler.threads_for_stage()),
         "--force",
         sanitize_path(fasta),
     ]
@@ -1720,13 +1762,14 @@ def run_pipeline(job_id: str, fastq_path: Path,
             results["host_depletion"] = {"depleted": False, "host_percent": human_pct}
 
         # ── 4. Assembly ───────────────────────────────────────────────────
-        fasta, asm_qc = stage_assembly(
+        fasta, asm_qc, asm_qc_comment = stage_assembly(
             job_id, filtered_r1, out_dir, read_type,
             fastq_r2=filtered_r2,
             kraken2=results.get("kraken2"),
         )
-        results["assembly_fasta"]    = str(fasta) if fasta else None
-        results["assembly_qc_checks"] = asm_qc
+        results["assembly_fasta"]      = str(fasta) if fasta else None
+        results["assembly_qc_checks"]  = asm_qc
+        results["assembly_qc_comment"] = asm_qc_comment
         if not fasta:
             raise RuntimeError("Assembly failed — no output FASTA produced.")
         logger.info("[%s] Assembly: %s", job_id, fasta)
@@ -1885,7 +1928,7 @@ def stage_qc(job_id: str, fastq: Path, out_dir: Path,
             "NanoPlot", "--fastq", sanitize_path(fastq),
             "--outdir", str(qc_dir),
             "--N50", "--loglength", "--no_static",
-            "--threads", str(MAX_THREADS),
+            "--threads", str(scheduler.threads_for_stage()),
         ]
         rc, out, err = _run(cmd, qc_dir, env_name="analiz")
         nano_stats = qc_dir / "NanoStats.txt"
@@ -1952,7 +1995,7 @@ def stage_qc(job_id: str, fastq: Path, out_dir: Path,
                 "-O", str(filt_r2),
                 "--json", str(json_out),
                 "--html", str(qc_dir / "fastp.html"),
-                "--thread", str(MAX_THREADS),
+                "--thread", str(scheduler.threads_for_stage()),
                 "--detect_adapter_for_pe",
                 "-g", "-x",
                 "--length_required", "50",
@@ -1967,7 +2010,7 @@ def stage_qc(job_id: str, fastq: Path, out_dir: Path,
                 "-o", str(filt_r1),
                 "--json", str(json_out),
                 "--html", str(qc_dir / "fastp.html"),
-                "--thread", str(MAX_THREADS),
+                "--thread", str(scheduler.threads_for_stage()),
                 "-g", "-x",
                 "--length_required", "50",
                 "-q", "20",

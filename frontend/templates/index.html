@@ -710,15 +710,11 @@ async function startAllUploads() {
   const total = sampleQueue.length;
   document.getElementById('upload-progress').classList.remove('hidden');
 
-  for (let i = 0; i < sampleQueue.length; i++) {
-    const sample = sampleQueue[i];
-    try {
-      const data = await uploadSample(sample, i, total);
-      spawnJobCard(data.job_id, sample.name, data.paired_end);
-    } catch(err) {
-      spawnJobCard(null, sample.name, false, err.message);
-    }
-  }
+  await Promise.all(sampleQueue.map((sample, i) =>
+    uploadSample(sample, i, total)
+      .then(data => spawnJobCard(data.job_id, sample.name, data.paired_end))
+      .catch(err => spawnJobCard(null, sample.name, false, err.message))
+  ));
 
   document.getElementById('upload-progress').classList.add('hidden');
   sampleQueue = [];

@@ -249,9 +249,17 @@ def _summary_table(samples: list[dict]) -> str:
 def generate_comparison_report(comp_id: str,
                                 samples: list[dict[str, Any]],
                                 newick: str | None,
-                                distances: list[dict]) -> str:
+                                distances: list[dict],
+                                ai_summary: str = "") -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     n   = len(samples)
+    summary_block = ""
+    if ai_summary:
+        summary_block = (
+            "<div style='background:#f0f9ff;border-left:4px solid #0284c7;"
+            "padding:1rem;margin:1rem 0;border-radius:4px'>"
+            f"<strong>Epidemiological Summary (AI):</strong><br>{ai_summary}</div>"
+        )
 
     tree_html = ""
     if newick:
@@ -309,6 +317,8 @@ def generate_comparison_report(comp_id: str,
 </div>
 
 <div class="container">
+
+{summary_block}
 
   <!-- Summary table -->
   <div class="section">

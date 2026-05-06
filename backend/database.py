@@ -57,6 +57,14 @@ def init_db() -> None:
             )
         except Exception:
             pass
+        for col, defn in [
+            ("error_code",   "TEXT"),
+            ("error_detail", "TEXT"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {defn}")
+            except Exception:
+                pass
     logger.info("Database ready: %s", DB_PATH)
 
 
@@ -75,15 +83,16 @@ def create_job(job_id: str, filename: str, expires_at: str,
 def update_job_status(job_id: str, status: str,
                       error: str = None,
                       read_type: str = None,
-                      report_path: str = None) -> None:
+                      report_path: str = None,
+                      error_code: str = None,
+                      error_detail: str = None) -> None:
     fields, vals = [], []
     fields.append("status = ?");     vals.append(status)
-    if error is not None:
-        fields.append("error = ?");  vals.append(error)
-    if read_type is not None:
-        fields.append("read_type = ?"); vals.append(read_type)
-    if report_path is not None:
-        fields.append("report_path = ?"); vals.append(report_path)
+    if error        is not None: fields.append("error = ?");        vals.append(error)
+    if read_type    is not None: fields.append("read_type = ?");    vals.append(read_type)
+    if report_path  is not None: fields.append("report_path = ?");  vals.append(report_path)
+    if error_code   is not None: fields.append("error_code = ?");   vals.append(error_code)
+    if error_detail is not None: fields.append("error_detail = ?"); vals.append(error_detail)
     vals.append(job_id)
     with get_conn() as conn:
         conn.execute(
