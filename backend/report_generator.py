@@ -354,6 +354,55 @@ def _mobsuite_section(mob: dict) -> str:
     return "\n".join(rows)
 
 
+def _primers_section(primers: list[dict]) -> str:
+    """Renders designed PCR primer pairs, one block per target gene."""
+    if not primers:
+        return ("<p style='color:#6b7280'>No primers were designed. This step runs "
+                "only when AMRFinderPlus places at least one gene on a contig, and "
+                "needs Primer3 (and MAFFT for multi-copy genes) to be installed.</p>")
+
+    blocks = []
+    for target in primers:
+        gene  = target.get("gene", "?")
+        pairs = target.get("primers", []) or []
+        note  = target.get("note", "")
+        badge = (" <span style='background:#0ea5e9;color:#fff;border-radius:4px;"
+                 "padding:1px 6px;font-size:.72rem;'>AI target</span>"
+                 if target.get("ai_recommended") else "")
+
+        if not pairs:
+            blocks.append(
+                f"<p><strong><code>{gene}</code></strong>{badge} &mdash; "
+                f"<span style='color:#6b7280'>{note or 'no primer pair met the criteria.'}</span></p>")
+            continue
+
+        region = target.get("conserved_region_bp")
+        header = (f"<p style='margin-bottom:.35rem'><strong><code>{gene}</code></strong>{badge}"
+                  f" <span style='color:#6b7280;font-size:.85rem'>"
+                  f"template {region} bp from {target.get('n_sequences', 0)} locus/loci"
+                  f"{' &middot; ' + note if note else ''}</span></p>")
+        rows = ["<table><thead><tr><th>#</th><th>Forward (5'&rarr;3')</th>"
+                "<th>Reverse (5'&rarr;3')</th><th>Tm F/R</th><th>GC% F/R</th>"
+                "<th>Amplicon</th></tr></thead><tbody>"]
+        for pr in pairs:
+            rows.append(
+                f"<tr><td>{pr.get('pair','—')}</td>"
+                f"<td><code>{pr.get('forward','—')}</code></td>"
+                f"<td><code>{pr.get('reverse','—')}</code></td>"
+                f"<td>{pr.get('fwd_tm','—')} / {pr.get('rev_tm','—')}</td>"
+                f"<td>{pr.get('fwd_gc','—')} / {pr.get('rev_gc','—')}</td>"
+                f"<td>{pr.get('amplicon','—')} bp</td></tr>")
+        rows.append("</tbody></table>")
+        blocks.append(header + "\n".join(rows))
+
+    blocks.append(
+        "<p style='color:#6b7280;font-size:.85rem;margin-top:.75rem'>"
+        "Primers are designed <em>in silico</em> from this assembly only. Check "
+        "specificity (e.g. BLAST / in-silico PCR against the target genus) and "
+        "validate in the lab before use.</p>")
+    return "\n".join(blocks)
+
+
 def _abricate_section(abricate: dict) -> str:
     """Renders Abricate (CARD + VFDB) results as a table."""
     if not abricate:
@@ -576,6 +625,7 @@ def generate_html_report(job_id: str,
     amr         = pipeline_results.get("amr", {})
     abricate    = pipeline_results.get("abricate") or {}
     mobsuite    = pipeline_results.get("mobsuite") or {}
+    primers     = pipeline_results.get("primers") or []
     bandage     = pipeline_results.get("bandage") or {}
     quast       = pipeline_results.get("quast") or {}
     checkm2     = pipeline_results.get("checkm2") or {}
@@ -786,6 +836,14 @@ def generate_html_report(job_id: str,
     <div class="section-title">&#x1F48A; Antimicrobial Resistance Genes ({amr.get('count',0)} genes)</div>
     <div class="section-body">
       {_amr_table(amr.get('genes', []))}
+    </div>
+  </div>
+
+  <!-- PCR Primers -->
+  <div class="section">
+    <div class="section-title">&#x1F9EA; PCR Primers ({sum(len(t.get('primers', [])) for t in primers)} pairs)</div>
+    <div class="section-body">
+      {_primers_section(primers)}
     </div>
   </div>
 

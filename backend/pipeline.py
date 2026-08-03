@@ -33,6 +33,7 @@ from errors import (
 )
 import scheduler
 from ai_interpreter import interpret_assembly_qc
+from primer_designer import design_all_primers
 from security import safe_sample_name, sanitize_path
 
 logger = logging.getLogger("pipeline")
@@ -1265,6 +1266,13 @@ def stage_amr(job_id: str, fasta: Path, out_dir: Path) -> dict[str, Any]:
                     "subclass": row.get("Subclass", ""),
                     "identity": row.get("% Identity to reference sequence", ""),
                     "method":   row.get("Method", ""),
+                    # Locus on the assembly. Kept so downstream steps (primer
+                    # design) can slice out this gene's own sequence instead of
+                    # guessing at an arbitrary contig.
+                    "contig":   row.get("Contig id", ""),
+                    "start":    row.get("Start", ""),
+                    "stop":     row.get("Stop", ""),
+                    "strand":   row.get("Strand", ""),
                 })
 
     result = {"genes": genes, "count": len(genes)}
@@ -1835,6 +1843,27 @@ def run_pipeline(job_id: str, fastq_path: Path,
         else:
             results["amr"] = stage_amr(job_id, fasta, out_dir)
             logger.info("[%s] AMR: %d genes found.", job_id, results["amr"].get("count", 0))
+
+        # 10b. PCR primer design for the AMR genes that were located on contigs
+        amr_hits = results["amr"].get("genes", [])
+        if skip_bact or not amr_hits:
+            reason = skip_reason if skip_bact else "No AMR genes to design primers for."
+            db.update_stage(job_id, "primers", "skipped", reason)
+            results["primers"] = []
+        else:
+            try:
+                db.update_stage(job_id, "primers", "running",
+                                f"Designing primers for {len(amr_hits)} AMR hit(s)…")
+                results["primers"] = design_all_primers(results["amr"], [], fasta)
+                designed = sum(len(p.get("primers", [])) for p in results["primers"])
+                db.update_stage(job_id, "primers", "done", json.dumps({
+                    "targets": len(results["primers"]), "pairs": designed}))
+                logger.info("[%s] Primers: %d pair(s) across %d target(s).",
+                            job_id, designed, len(results["primers"]))
+            except Exception as pr_err:
+                logger.warning("[%s] Primer design error: %s", job_id, pr_err)
+                db.update_stage(job_id, "primers", "failed", str(pr_err))
+                results["primers"] = []
 
         # 11. Abricate (skip if viral/human dominant)
         if skip_bact:

@@ -28,7 +28,7 @@ jobs:
         working-directory: backend
         run: |
           python -c "import config, security, database, cleanup, pipeline"
-          python -c "import ai_interpreter, report_generator"
+          python -c "import ai_interpreter, primer_designer, report_generator"
           echo "✅ Tüm modüller import edildi"
 
       - name: Güvenlik fonksiyonlarını test et
@@ -89,6 +89,35 @@ jobs:
           print("✅ Veritabanı testleri geçti")
           EOF
 
+      - name: Primer şablon çıkarımı testi
+        working-directory: backend
+        run: |
+          python - << 'EOF'
+          import sys; sys.path.insert(0, '.')
+          from primer_designer import _extract_gene_region, _revcomp
+
+          contigs = {"contig_1": "A"*1000 + "GATTACA"*50 + "T"*1000}
+          hit = {"gene":"blaCTX-M-15","contig":"contig_1",
+                 "start":"1001","stop":"1350","strand":"+"}
+
+          fwd = _extract_gene_region(contigs, hit)
+          rev = _extract_gene_region(contigs, dict(hit, strand="-"))
+          assert fwd and len(fwd) == 950                 # 350 bp gen + 2x300 bp flank
+          assert rev == _revcomp(fwd)                    # ters iplikçik doğru çevriliyor
+
+          # Koordinatı olmayan / bilinmeyen kontiga düşen hit şablon ÜRETMEMELİ:
+          # aksi halde primer, adını taşımadığı bir bölgeye tasarlanır.
+          assert _extract_gene_region(contigs, dict(hit, contig="yok")) is None
+          assert _extract_gene_region(contigs, {"gene":"x","contig":"contig_1"}) is None
+
+          # Farklı genler farklı şablon almalı
+          g2 = _extract_gene_region(contigs, dict(hit, gene="aac(3)-IId",
+                                                  start="2000", stop="2300"))
+          assert g2 != fwd
+
+          print("✅ Primer şablon çıkarımı testleri geçti")
+          EOF
+
       - name: Rapor üretimi testi
         working-directory: backend
         run: |
@@ -103,10 +132,18 @@ jobs:
                 "resistance_profile":"ESBL","treatment_implications":"Carbapenem",
                 "epidemiology":"ST131","pcr_targets":[],"risk_level":"HIGH",
                 "summary":"Test summary"}
-          html = generate_html_report("test", pr, ai, [])
+          pr["primers"] = [{"gene":"CTX-M-15","n_sequences":1,"conserved_region_bp":1476,
+                            "ai_recommended":True,"note":"Single sequence; MAFFT skipped.",
+                            "primers":[{"pair":1,"forward":"ATGAGCAAATTATGCCTG",
+                                        "reverse":"TCAGCGCTTGTCTCGCTA","fwd_tm":58.2,
+                                        "rev_tm":59.1,"fwd_gc":44.4,"rev_gc":55.6,
+                                        "amplicon":621}]}]
+          html = generate_html_report("test", pr, ai)
           assert len(html) > 1000
           assert "CTX-M-15" in html
           assert "ST131" in html
+          assert "ATGAGCAAATTATGCCTG" in html          # primer bölümü render edildi
+          assert "Research use only" in html           # sorumluluk reddi bandı duruyor
           print("✅ Rapor üretimi testi geçti")
           EOF
 
