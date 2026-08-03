@@ -28,7 +28,7 @@ jobs:
         working-directory: backend
         run: |
           python -c "import config, security, database, cleanup, pipeline"
-          python -c "import ai_interpreter, primer_designer, report_generator"
+          python -c "import ai_interpreter, report_generator"
           echo "✅ Tüm modüller import edildi"
 
       - name: Güvenlik fonksiyonlarını test et

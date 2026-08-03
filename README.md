@@ -1,6 +1,9 @@
 # 🧬 LycianWay
 
-**Automated bacterial genomic analysis · AI clinical interpretation · PCR primer design**
+**Automated bacterial genomic analysis · AI clinical interpretation**
+
+> ⚠️ **Research use only.** Output includes LLM-generated text and is not validated
+> for in vitro diagnostic use. Do not use it alone for clinical decisions.
 
 [![CI](https://github.com/cinnetcrash/GenomePlatform/actions/workflows/ci.yml/badge.svg)](https://github.com/cinnetcrash/GenomePlatform/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -21,7 +24,7 @@
 5. **AMR profiling** — AMRFinderPlus
 6. **Annotation** — Bakta
 7. **AI interpretation** — Claude synthesises findings into a clinical narrative
-8. **PCR primer design** — MAFFT conserved regions → Primer3
+8. **PCR primer design** — *planned, not yet released* (MAFFT conserved regions → Primer3)
 9. **HTML report** — downloadable, self-contained
 
 All uploaded data is **automatically deleted after 24 hours**.
@@ -61,7 +64,7 @@ bash start.sh
 | Disk | 50 GB | 500 GB SSD |
 
 **Required tools** (auto-installed via Docker):
-`fastp` · `NanoPlot` · `Flye` · `Shovill` · `mlst` · `AMRFinderPlus` · `Bakta` · `MAFFT` · `Primer3`
+`fastp` · `NanoPlot` · `Flye` · `Shovill` · `mlst` · `AMRFinderPlus` · `Bakta`
 
 ---
 
@@ -77,7 +80,6 @@ GenomePlatform/
 │   ├── cleanup.py          # 24h auto-deletion
 │   ├── pipeline.py         # Read detection + analysis stages
 │   ├── ai_interpreter.py   # Claude API integration
-│   ├── primer_designer.py  # MAFFT + Primer3
 │   └── report_generator.py # HTML report
 ├── frontend/
 │   └── templates/index.html
