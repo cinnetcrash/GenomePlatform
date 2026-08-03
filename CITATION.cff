@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: If you use this work, please cite it as below.
+title: 'GenomePlatform: automated bacterial genomic analysis with AI-assisted clinical interpretation'
+type: software
+authors:
+- given-names: Gültekin
+  family-names: Ünal
+  orcid: https://orcid.org/0000-0002-8996-7028
+  affiliation: Ankara University, Faculty of Veterinary Medicine, Department of Microbiology
+abstract: A FastAPI-based platform that runs a bacterial genome analysis chain (QC, assembly,
+  MLST, AMR detection, annotation) from a single upload and renders the results as a report,
+  with an AI-generated narrative summary and PCR primer design support. Research use only;
+  not validated for in vitro diagnostic use.
+repository-code: https://github.com/cinnetcrash/GenomePlatform
+url: https://github.com/cinnetcrash/GenomePlatform
+license: MIT
+keywords:
+- bacterial genomics
+- clinical microbiology
+- antimicrobial resistance
+- MLST
+- FastAPI
+- PCR primer design
