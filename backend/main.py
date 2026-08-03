@@ -6,6 +6,7 @@ import collections
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -479,9 +480,30 @@ async def assembly_graph(request: Request, job_id: str):
                         filename=f"assembly_graph_{job_id[:8]}.png")
 
 
+def _history_enabled() -> bool:
+    """Whether /history may enumerate recent jobs.
+
+    Off by default: the response contains recent job IDs, and a job ID is the
+    only thing /report/{job_id} asks for. An open /history therefore hands
+    every recent report — including the uploaded file names — to anyone who
+    can reach the server. Turn it on only where the deployment already sits
+    behind authentication.
+    """
+    return os.environ.get("ENABLE_HISTORY_ENDPOINT", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @app.get("/history")
 async def analysis_history():
     """Returns the most recent analyses for the history panel."""
+    if not _history_enabled():
+        return JSONResponse(
+            {"analyses": [],
+             "disabled": True,
+             "detail": "The history endpoint is disabled. It exposes recent job IDs, "
+                       "which are sufficient to fetch the corresponding reports. Set "
+                       "ENABLE_HISTORY_ENDPOINT=1 only behind authentication."},
+            status_code=403,
+        )
     import json as _json
     jobs = db.get_recent_jobs(limit=20)
     result = []
